@@ -1,15 +1,16 @@
 // DSH-QoL — client bundle.
-// QoL settings page (settings.section id "qol"): two toggles in the harness's
-// own row/switch styling —
+// QoL settings page (settings.section id "qol"):
 //   • Session log button — show/hide the top-right "Session log" download
 //     button (the shipped session-log-export entry in the
 //     conversation.session.header.utilities slot; hidden via an injected
 //     stylesheet when off).
-//   • On exit — "minimize to tray" vs "quit completely". The preference is
-//     persisted host-side (~/.dsh/qol-prefs.json, written through
-//     /dsh-qol/prefs); the desktop shell (deepseek-harness-desktop) reads
-//     that file to decide its window-close behavior. If the shell exposes a
-//     window.dshDesktop close-behavior bridge, it is called directly too.
+//   • When closing window — Reasonix-style segmented control: Keep Running
+//     (tray) vs Quit. Persisted host-side to ~/.dsh/qol-prefs.json; the
+//     desktop shell reads it for its window-close behavior.
+//   • MCP servers — a manager: list of the global MCP servers from
+//     ~/.dsh/cordis.patch.yml merged with live loader state, with an
+//     enable/disable toggle and a remove action, plus a detail screen
+//     (status/source/transport/command/environment).
 //
 // Classic-script bundle served verbatim by client-modules at
 // /plugins/@deepseek-ai/dsh-qol/client.js — no build step.
@@ -21,8 +22,8 @@ window.__ModuleLoader__.load({
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
 
-		//#region helpers
-		/** DSH theme-variable colors (matches the Models/General row styling). */
+		//#region theme & controls
+		/** DSH theme-variable colors (matches Models/General row styling). */
 		const ROW = {
 			border: "1px solid var(--dsw-alias-border-l2)",
 			borderRadius: "12px",
@@ -33,7 +34,17 @@ window.__ModuleLoader__.load({
 		};
 		const TITLE = { color: "var(--dsw-alias-label-primary)", fontSize: "14px", fontWeight: "500", lineHeight: "22px" };
 		const DESC = { color: "var(--dsw-alias-label-tertiary)", fontSize: "12px", lineHeight: "18px", marginTop: "2px" };
-		/** A DSH-style switch: 36px tall track with a sliding knob. */
+		const MONO = { fontFamily: "ui-monospace, SFMono-Regular, Consolas, monospace", fontSize: "11px", lineHeight: "16px" };
+		/** Tone colors for the status dot. */
+		const TONE = {
+			available: "var(--dsw-alias-state-success-primary)",
+			starting: "var(--dsw-alias-state-warn-primary)",
+			error: "var(--dsw-alias-state-error-primary)",
+			disabled: "var(--dsw-alias-label-tertiary)",
+			stopping: "var(--dsw-alias-state-warn-primary)",
+			unknown: "var(--dsw-alias-label-tertiary)"
+		};
+		/** A DSH-style switch. */
 		function Switch({ checked, onChange, label, disabled }) {
 			return react.createElement("button", {
 				type: "button",
@@ -71,13 +82,7 @@ window.__ModuleLoader__.load({
 				}
 			}));
 		}
-		/**
-		 * A DSH-style segmented control: one rounded border, a vertical divider
-		 * between choices, the selected option filled with the product accent.
-		 * Used for the close-behavior row (two labeled actions, not an on/off).
-		 * @param value - selected option id.
-		 * @param options - [{ id, label }].
-		 */
+		/** A DSH-style segmented control (two labeled actions). */
 		function SegmentedControl({ value, options, onChange, label, disabled }) {
 			return react.createElement("div", {
 				role: "radiogroup",
@@ -123,6 +128,9 @@ window.__ModuleLoader__.load({
 				}
 			}, opt.label)));
 		}
+		//#endregion
+
+		//#region prefs helpers
 		/** Read current prefs from the host route. */
 		function fetchPrefs() {
 			return fetch("/dsh-qol/prefs", { headers: { Accept: "application/json" } })
@@ -143,17 +151,10 @@ window.__ModuleLoader__.load({
 				return res.json();
 			});
 		}
-		/**
-		 * Apply the session-log-button visibility: inject/remove a stylesheet
-		 * hiding the header-utilities outlet (which contains the Session log
-		 * download button). Module-scoped so the <style> survives remounts.
-		 */
+		/** Apply the session-log-button visibility (module-scoped <style>). */
 		let sessionLogStyle = null;
 		function applySessionLogButton(visible) {
-			if (sessionLogStyle !== null) {
-				sessionLogStyle.remove();
-				sessionLogStyle = null;
-			}
+			if (sessionLogStyle !== null) { sessionLogStyle.remove(); sessionLogStyle = null; }
 			if (visible) return;
 			const style = document.createElement("style");
 			style.dataset.plugin = "@deepseek-ai/dsh-qol";
@@ -167,19 +168,279 @@ window.__ModuleLoader__.load({
 			const bridge = window.dshDesktop;
 			if (bridge === null || bridge === void 0) return;
 			if (typeof bridge.setCloseBehavior === "function") {
-				try {
-					bridge.setCloseBehavior(behavior);
-				} catch (_) { /* shell may reject unknown values; pref file is authoritative */ }
+				try { bridge.setCloseBehavior(behavior); } catch (_) { /* pref file is authoritative */ }
 			}
 		}
 		//#endregion
 
+		//#region MCP manager
+		/** Fetch the MCP server list. */
+		function fetchMcp() {
+			return fetch("/dsh-qol/mcp", { headers: { Accept: "application/json" } })
+				.then((res) => {
+					if (!res.ok) throw new Error(`HTTP ${res.status}`);
+					return res.json();
+				})
+				.then((json) => json.servers ?? []);
+		}
+		/** Toggle one server's enabled state (applies on restart). */
+		function setMcpEnabled(id, enabled) {
+			return fetch(`/dsh-qol/mcp/${encodeURIComponent(id)}`, {
+				method: "PUT",
+				headers: { "Content-Type": "application/json", Accept: "application/json" },
+				body: JSON.stringify({ enabled })
+			}).then((res) => {
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				return res.json();
+			});
+		}
+		/** Remove one server (applies on restart). */
+		function removeMcp(id) {
+			return fetch(`/dsh-qol/mcp/${encodeURIComponent(id)}`, {
+				method: "DELETE",
+				headers: { Accept: "application/json" }
+			}).then((res) => {
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				return res.json();
+			});
+		}
+		/** Server icon: subdued circular badge with a database glyph. */
+		function ServerIcon({ transport }) {
+			const glyph = transport === "stdio" ? "⚙" : transport === "sse" || transport === "streamable-http" ? "⇄" : "⛁";
+			return react.createElement("span", {
+				"aria-hidden": "true",
+				style: {
+					flex: "none",
+					width: "32px",
+					height: "32px",
+					borderRadius: "999px",
+					border: "1px solid var(--dsw-alias-border-l2)",
+					background: "var(--dsw-alias-interactive-bg-hover)",
+					color: "var(--dsw-alias-label-secondary)",
+					display: "inline-flex",
+					alignItems: "center",
+					justifyContent: "center",
+					fontSize: "14px"
+				}
+			}, glyph);
+		}
+		/** One row in the server list. */
+		function McpRow({ server, onOpen, onToggle, onRemove }) {
+			return react.createElement("div", {
+				style: {
+					display: "flex",
+					alignItems: "center",
+					gap: "10px",
+					padding: "10px 14px",
+					cursor: "pointer",
+					borderBottom: "1px solid var(--dsw-alias-border-l2)"
+				},
+				onClick: onOpen,
+				role: "button",
+				tabIndex: 0,
+				"aria-label": `Open ${server.serverName}`
+			},
+				react.createElement(ServerIcon, { transport: server.transport }),
+				react.createElement("div", { style: { minWidth: "0", flex: "1" } },
+					react.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+						react.createElement("span", {
+							"aria-hidden": "true",
+							style: { width: "7px", height: "7px", borderRadius: "999px", background: TONE[server.tone] ?? TONE.unknown, flex: "none" }
+						}),
+						react.createElement("span", { style: TITLE }, server.serverName),
+						react.createElement("span", {
+							style: {
+								border: "1px solid var(--dsw-alias-border-l3)",
+								color: "var(--dsw-alias-label-secondary)",
+								borderRadius: "999px",
+								padding: "0 6px",
+								fontSize: "10px",
+								lineHeight: "15px",
+								flex: "none"
+							}
+						}, server.transport)
+					),
+					react.createElement("div", { style: DESC }, server.status),
+					react.createElement("div", {
+						title: server.command,
+						style: { ...MONO, color: "var(--dsw-alias-label-tertiary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: "4px" }
+					}, server.commandPreview)
+				),
+				react.createElement("button", {
+					type: "button",
+					style: {
+						flex: "none",
+						border: "none",
+						background: "transparent",
+						color: "var(--dsw-alias-label-tertiary)",
+						fontSize: "13px",
+						padding: "4px",
+						cursor: "pointer"
+					},
+					title: `Remove ${server.serverName}`,
+					"aria-label": `Remove ${server.serverName}`,
+					onClick: (event) => { event.stopPropagation(); onRemove(); }
+				}, "Remove"),
+				react.createElement("span", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: "13px" } }, "❯"),
+				react.createElement(Switch, {
+					checked: server.enabled,
+					label: `${server.enabled ? "Disable" : "Enable"} ${server.serverName} MCP server`,
+					onChange: (value) => { onToggle(value); }
+				})
+			);
+		}
+		/** Detail-screen info grid entry. */
+		function InfoRow({ label, children, mono }) {
+			return react.createElement("div", { style: { display: "flex", gap: "12px", padding: "8px 0", borderBottom: "1px solid var(--dsw-alias-border-l2)" } },
+				react.createElement("div", { style: { width: "110px", flex: "none", color: "var(--dsw-alias-label-tertiary)", fontSize: "11px", fontWeight: "600", lineHeight: "18px", textTransform: "uppercase" } }, label),
+				react.createElement("div", { style: mono === true ? { ...MONO, color: "var(--dsw-alias-label-primary)", wordBreak: "break-all" } : { color: "var(--dsw-alias-label-primary)", fontSize: "13px", lineHeight: "18px" } }, children)
+			);
+		}
+		/** The MCP server list screen. */
+		function McpListView({ servers, loading, error, onOpen, onToggle, onRemove }) {
+			const sectionStyle = {
+				maxWidth: "720px",
+				color: "var(--dsw-alias-label-primary)",
+				display: "flex",
+				flexDirection: "column",
+				gap: "12px"
+			};
+			return react.createElement("div", { style: sectionStyle },
+				react.createElement("div", null,
+					react.createElement("h2", { style: { color: "var(--dsw-alias-label-primary)", margin: "0", fontSize: "16px", fontWeight: "500", lineHeight: "24px" } },
+						"Global MCP ", servers.length),
+					react.createElement("p", { style: { color: "var(--dsw-alias-label-tertiary)", margin: "2px 0 0", fontSize: "13px", lineHeight: "20px" } },
+						"Install once and use automatically in every DeepSeek project.")
+				),
+				error === null ? null : react.createElement("p", { style: { color: "var(--dsw-alias-state-error-primary)", margin: "0", fontSize: "13px", lineHeight: "20px" } }, error),
+				react.createElement("div", {
+					style: {
+						border: "1px solid var(--dsw-alias-border-l2)",
+						borderRadius: "8px",
+						overflow: "hidden",
+						background: "var(--dsw-alias-bg-secondary, transparent)"
+					}
+				},
+					loading && servers.length === 0
+						? react.createElement("div", { style: { padding: "16px 14px", color: "var(--dsw-alias-label-tertiary)", fontSize: "13px" } }, "Loading servers…")
+						: servers.length === 0
+							? react.createElement("div", { style: { padding: "16px 14px", color: "var(--dsw-alias-label-tertiary)", fontSize: "13px" } }, "No MCP servers configured.")
+							: servers.map((server) => react.createElement(McpRow, {
+								key: server.id,
+								server,
+								onOpen: () => onOpen(server.id),
+								onToggle: (value) => onToggle(server.id, value),
+								onRemove: () => onRemove(server.id)
+							}))
+				),
+				react.createElement("p", { style: { color: "var(--dsw-alias-label-tertiary)", margin: "0", fontSize: "12px", lineHeight: "18px" } },
+					"Toggles and removals edit ~/.dsh/cordis.patch.yml and take effect on the next restart.")
+			);
+		}
+		/** The MCP server detail screen. */
+		function McpDetailView({ server, error, onBack, onToggle, onRemove, confirmRemove, setConfirmRemove }) {
+			if (server === void 0) {
+				return react.createElement("div", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: "13px" } },
+					react.createElement("button", { type: "button", onClick: onBack, style: { background: "none", border: "none", color: "var(--dsw-alias-label-primary)", cursor: "pointer", padding: "0", fontSize: "13px" } }, "← Back to MCP servers"),
+					react.createElement("p", { style: { marginTop: "12px" } }, "Server not found."));
+			}
+			const sectionStyle = {
+				maxWidth: "720px",
+				color: "var(--dsw-alias-label-primary)",
+				display: "flex",
+				flexDirection: "column",
+				gap: "14px"
+			};
+			return react.createElement("div", { style: sectionStyle },
+				react.createElement("button", {
+					type: "button",
+					onClick: onBack,
+					style: { alignSelf: "flex-start", background: "none", border: "none", color: "var(--dsw-alias-label-primary)", cursor: "pointer", padding: "0", fontSize: "13px", lineHeight: "20px" }
+				}, "← Back to MCP servers"),
+				react.createElement("div", null,
+					react.createElement("h2", { style: { color: "var(--dsw-alias-label-primary)", margin: "0", fontSize: "16px", fontWeight: "500", lineHeight: "24px" } }, server.serverName),
+					react.createElement("p", { style: { color: "var(--dsw-alias-label-tertiary)", margin: "2px 0 0", fontSize: "13px", lineHeight: "20px" } },
+						"Connection details, diagnostics, and tools.")
+				),
+				error === null ? null : react.createElement("p", { style: { color: "var(--dsw-alias-state-error-primary)", margin: "0", fontSize: "13px" } }, error),
+				react.createElement("div", { style: { border: "1px solid var(--dsw-alias-border-l2)", borderRadius: "8px", padding: "4px 14px" } },
+					react.createElement(InfoRow, { label: "Status" },
+						react.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: "6px" } },
+							react.createElement("span", { "aria-hidden": "true", style: { width: "7px", height: "7px", borderRadius: "999px", background: TONE[server.tone] ?? TONE.unknown, flex: "none" } }),
+							server.status
+						)
+					),
+					react.createElement(InfoRow, { label: "Source" }, "Global"),
+					react.createElement(InfoRow, { label: "Transport" }, server.transport),
+					react.createElement(InfoRow, { label: "Command", mono: true }, server.command),
+					react.createElement(InfoRow, { label: "Environment" },
+						server.envKeys.length === 0
+							? "—"
+							: react.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "2px" } },
+								server.envKeys.map((key) => react.createElement("code", { key, style: { ...MONO, color: "var(--dsw-alias-label-primary)" } }, key)))
+					)
+				),
+				react.createElement("div", { style: { display: "flex", alignItems: "center", gap: "12px" } },
+					react.createElement(Switch, {
+						checked: server.enabled,
+						label: `${server.enabled ? "Disable" : "Enable"} ${server.serverName} MCP server`,
+						onChange: (value) => onToggle(value)
+					}),
+					react.createElement("span", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: "12px" } },
+						server.enabled ? "Enabled" : "Disabled")
+				),
+				react.createElement("div", { style: { display: "flex", gap: "8px" } },
+					confirmRemove
+						? react.createElement(react.Fragment, null,
+							react.createElement("span", { style: { color: "var(--dsw-alias-label-secondary)", fontSize: "13px", lineHeight: "36px" } },
+								`Remove ${server.serverName}? This removes the global server configuration.`),
+							react.createElement("button", { type: "button", onClick: () => { setConfirmRemove(false); onRemove(); }, style: buttonStyle("danger") }, "Remove server"),
+							react.createElement("button", { type: "button", onClick: () => setConfirmRemove(false), style: buttonStyle("secondary") }, "Cancel")
+						)
+						: react.createElement("button", { type: "button", onClick: () => setConfirmRemove(true), style: buttonStyle("secondary") }, "Remove server")
+				),
+				react.createElement("div", { style: { border: "1px dashed var(--dsw-alias-border-l3)", borderRadius: "8px", padding: "14px" } },
+					react.createElement("div", { style: { color: "var(--dsw-alias-label-primary)", fontSize: "13px", fontWeight: "500", lineHeight: "20px" } },
+						"This connection did not return tool details."),
+					react.createElement("p", { style: { color: "var(--dsw-alias-label-tertiary)", margin: "4px 0 0", fontSize: "12px", lineHeight: "18px" } },
+						"The server may expose resources or prompts instead of tools, or discovery may not have completed.")
+				)
+			);
+		}
+		/** Shared button style helper. */
+		function buttonStyle(kind) {
+			return {
+				boxSizing: "border-box",
+				height: "36px",
+				font: "inherit",
+				cursor: "pointer",
+				border: "none",
+				borderRadius: "18px",
+				display: "inline-flex",
+				alignItems: "center",
+				justifyContent: "center",
+				gap: "4px",
+				padding: "0 14px",
+				fontSize: "14px",
+				lineHeight: "22px",
+				...(kind === "danger"
+					? { background: "var(--dsw-alias-state-error-primary)", color: "var(--dsw-alias-label-primary-foreground)" }
+					: { background: "var(--dsw-alias-interactive-bg-hover)", color: "var(--dsw-alias-label-primary)" })
+			};
+		}
+		//#endregion
+
 		/**
-		 * The QoL settings page: two toggles in the harness's row style.
+		 * The QoL settings page: prefs rows plus an MCP server manager with
+		 * list and detail views (in-page navigation).
 		 */
 		function QolSection(props) {
 			const [prefs, setPrefs] = react.useState(null);
 			const [error, setError] = react.useState(null);
+			const [view, setView] = react.useState("prefs"); // prefs | mcp | mcp:<id>
+			const [servers, setServers] = react.useState([]);
+			const [loading, setLoading] = react.useState(false);
+			const [confirmRemove, setConfirmRemove] = react.useState(false);
 
 			react.useEffect(() => {
 				let alive = true;
@@ -191,6 +452,14 @@ window.__ModuleLoader__.load({
 					})
 					.catch((err) => alive && setError(err instanceof Error ? err.message : String(err)));
 				return () => { alive = false; };
+			}, []);
+
+			const refreshMcp = react.useCallback(() => {
+				setLoading(true);
+				fetchMcp()
+					.then((list) => { setServers(list); setError(null); })
+					.catch((err) => setError(err instanceof Error ? err.message : String(err)))
+					.finally(() => setLoading(false));
 			}, []);
 
 			const update = (patch) => {
@@ -205,6 +474,23 @@ window.__ModuleLoader__.load({
 						if (Object.prototype.hasOwnProperty.call(patch, "closeBehavior")) {
 							notifyDesktopCloseBehavior(next.closeBehavior);
 						}
+					})
+					.catch((err) => setError(err instanceof Error ? err.message : String(err)));
+			};
+
+			const toggleServer = (id, enabled) => {
+				setMcpEnabled(id, enabled)
+					.then((json) => { setServers(json.servers ?? servers); setError(null); })
+					.catch((err) => setError(err instanceof Error ? err.message : String(err)));
+			};
+
+			const removeServer = (id) => {
+				removeMcp(id)
+					.then((json) => {
+						setServers(json.servers ?? servers);
+						setView("mcp");
+						setConfirmRemove(false);
+						setError(null);
 					})
 					.catch((err) => setError(err instanceof Error ? err.message : String(err)));
 			};
@@ -224,9 +510,43 @@ window.__ModuleLoader__.load({
 				react.createElement("div", { style: DESC }, desc)
 			);
 
+			// MCP detail view
+			if (view.startsWith("mcp:")) {
+				const id = view.slice(4);
+				const server = servers.find((s) => s.id === id);
+				return react.createElement(McpDetailView, {
+					server,
+					error,
+					onBack: () => setView("mcp"),
+					onToggle: (value) => toggleServer(id, value),
+					onRemove: () => removeServer(id),
+					confirmRemove,
+					setConfirmRemove
+				});
+			}
+			// MCP list view
+			if (view === "mcp") {
+				return react.createElement(McpListView, {
+					servers,
+					loading,
+					error,
+					onOpen: (id) => setView("mcp:" + id),
+					onToggle: toggleServer,
+					onRemove: (id) => {
+						// list-level remove: immediate with confirmation is on detail; here ask inline
+						if (confirmRemove === id) {
+							removeServer(id);
+						} else {
+							setConfirmRemove(id);
+							setTimeout(() => setConfirmRemove(false), 3000);
+						}
+					}
+				});
+			}
+			// prefs view
 			return react.createElement("div", { style: sectionStyle },
 				react.createElement("h2", { style: titleStyle }, "QoL"),
-				react.createElement("p", { style: introStyle }, "Quality-of-life toggles."),
+				react.createElement("p", { style: introStyle }, "Quality-of-life controls."),
 				error === null ? null : react.createElement("p", { style: errorStyle }, "Failed to save: ", error),
 				react.createElement("div", { style: ROW },
 					textBlock(
@@ -259,6 +579,22 @@ window.__ModuleLoader__.load({
 						],
 						onChange: (value) => update({ closeBehavior: value })
 					})
+				),
+				react.createElement("div", {
+					style: { ...ROW, cursor: "pointer" },
+					role: "button",
+					tabIndex: 0,
+					onClick: () => { refreshMcp(); setView("mcp"); }
+				},
+					react.createElement("div", {
+						"aria-hidden": "true",
+						style: { flex: "none", color: "var(--dsw-alias-label-tertiary)", fontSize: "16px", lineHeight: "1" }
+					}, "⛁"),
+					textBlock(
+						"MCP servers",
+						"View, enable, disable, and remove your global MCP servers."
+					),
+					react.createElement("span", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: "14px" } }, "❯")
 				)
 			);
 		}

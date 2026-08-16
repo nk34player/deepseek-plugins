@@ -24,6 +24,30 @@ A Reasonix-style segmented choice, not an on/off toggle:
 - **Quit** — closing the window quits the app completely. Needs the small
   shell patch below, because the packaged shell currently always hides.
 
+### 3. MCP servers (manager)
+A server-management screen for the **global MCP servers** defined in
+`~/.dsh/cordis.patch.yml` (the `@deepseek-ai/dsh-mcp-client` rows), opened
+from the "MCP servers" row.
+
+- **List** — "Global MCP N" header, one bordered panel, rows with: subdued
+  server icon, status dot + name + transport badge (stdio/sse/streamable-http),
+  availability text (available · running / starting / error / disabled /
+  available · starts on demand), monospace command preview (truncated, secret
+  values scrubbed), chevron → detail, Remove, enable/disable toggle.
+- **Status** — derived from the live Loader state (`ctx.loader` fiber phase)
+  merged with the config's `disabled` flag, not hardcoded.
+- **Detail** — "← Back to MCP servers", name header, info grid
+  (Status / Source / Transport / Command / Environment), enable toggle,
+  Remove with confirmation, and the "no tool details" empty state.
+- **Toggle / Remove** — edit `~/.dsh/cordis.patch.yml` surgically (only the
+  matching row block); they apply on the next restart, like any loader change.
+- **Security** — env values are never returned (only variable names), and
+  command previews scrub secret-shaped query values / API keys
+  (`--key ********`, `tvly-…`, `ctx7sk-…`).
+
+Host endpoints: `GET /dsh-qol/mcp`, `PUT /dsh-qol/mcp/<id>` (enabled),
+`DELETE /dsh-qol/mcp/<id>`.
+
 The preference is persisted to **`~/.dsh/qol-prefs.json`** through the host
 route `GET/PUT /dsh-qol/prefs` (same-origin; no secrets cross the browser).
 The desktop shell reads that file to decide its window-close behavior; the

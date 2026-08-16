@@ -11,6 +11,7 @@ const reactStub = {
 		return [hookStore.states[i], (v) => { hookStore.states[i] = typeof v === "function" ? v(hookStore.states[i]) : v; }];
 	},
 	useEffect: (fn) => { hookStore.effects.push(fn); },
+	useCallback: (fn) => fn,
 	__reset: () => { hookStore.states = []; hookStore.effects = []; hookStore.cursor = 0; },
 	__beginRender: () => { hookStore.cursor = 0; }
 };
@@ -53,12 +54,23 @@ console.log("registration OK: settings.section id=qol order=30");
 
 // --- render the section with stubbed fetch + hooks ---
 global.fetch = async (url, init) => {
+	const u = String(url);
+	if (u.includes("/dsh-qol/mcp")) {
+		if (init && (init.method === "PUT" || init.method === "DELETE")) {
+			return { ok: true, json: async () => ({ ok: true, servers: MCP_SERVERS }) };
+		}
+		return { ok: true, json: async () => ({ ok: true, servers: MCP_SERVERS }) };
+	}
 	if (init === undefined) {
 		return { ok: true, json: async () => ({ ok: true, prefs: { sessionLogButton: true, closeBehavior: "quit" } }) };
 	}
 	const body = JSON.parse(init.body);
 	return { ok: true, json: async () => ({ ok: true, prefs: { sessionLogButton: body.sessionLogButton ?? true, closeBehavior: body.closeBehavior ?? "quit" } }) };
 };
+const MCP_SERVERS = [
+	{ id: "mcp-context7", serverName: "context7", transport: "stdio", command: "node server.js --key ********", commandPreview: "node server.js --key ********", envKeys: ["CONTEXT7_API_KEY"], enabled: true, status: "available · running", tone: "available" },
+	{ id: "mcp-tavily", serverName: "tavily", transport: "stdio", command: "node proxy.js", commandPreview: "node proxy.js", envKeys: [], enabled: false, status: "disabled", tone: "disabled" }
+];
 
 reactStub.__reset();
 const tree = reg.comp({ close: () => {} });
@@ -99,6 +111,45 @@ setTimeout(() => {
 			throw new Error("desktop bridge not called with 'quit': " + JSON.stringify(window._bridgeCalls));
 		}
 		console.log("segmented Quit -> desktop bridge called with 'quit'");
-		console.log("SMOKE TEST PASSED");
+
+		// --- MCP manager: open the list view ---
+		reactStub.__beginRender();
+		const listTree = reg.comp({ close: () => {} });
+		const mcpRow = findElement(listTree, (n) => n.props && String(n.props.children ?? "").includes("MCP servers") === false && n.props.onClick && JSON.stringify(n).includes("MCP servers"));
+		// simpler: find the row whose children contain the "MCP servers" text
+		const walk2 = (node, out) => {
+			if (!node || typeof node !== "object") return;
+			if (node.props && typeof node.props.onClick === "function") out.push(node);
+			if (Array.isArray(node.children)) node.children.forEach((c) => walk2(c, out));
+		};
+		const clickables = [];
+		walk2(listTree, clickables);
+		// the MCP servers row is the div with onClick that switches view
+		const mcpNav = clickables.find((n) => JSON.stringify(n).includes("MCP servers"));
+		if (!mcpNav) throw new Error("MCP servers row not found");
+		mcpNav.props.onClick();
+		setTimeout(() => {
+			reactStub.__beginRender();
+			const mcpList = reg.comp({ close: () => {} });
+			// McpListView is a component element; find it by its props shape
+			const mcpViewEl = findElement(mcpList, (n) => n.props && Array.isArray(n.props.servers) && n.props.servers.length === 2);
+			if (!mcpViewEl) throw new Error("McpListView not rendered with servers");
+			if (mcpViewEl.props.servers[0].serverName !== "context7") throw new Error("context7 missing");
+			if (mcpViewEl.props.servers[1].status !== "disabled") throw new Error("tavily status wrong");
+			console.log("MCP list view OK: servers =", mcpViewEl.props.servers.map((s) => s.serverName).join(", "));
+			console.log("SMOKE TEST PASSED");
+		}, 50);
 	}, 50);
+
+	function findElement(node, pred) {
+		if (!node || typeof node !== "object") return null;
+		if (pred(node)) return node;
+		if (Array.isArray(node.children)) {
+			for (const c of node.children) {
+				const found = findElement(c, pred);
+				if (found) return found;
+			}
+		}
+		return null;
+	}
 }, 50);
