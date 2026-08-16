@@ -69,27 +69,36 @@ setTimeout(() => {
 	const settled = reg.comp({ close: () => {} });
 	const json = JSON.stringify(settled);
 	if (!json.includes("Session log button")) throw new Error("missing session-log row");
-	if (!json.includes("Minimize to tray on close")) throw new Error("missing tray row");
+	if (!json.includes("When closing window")) throw new Error("missing close-behavior row");
+	if (!json.includes("Keep Running") || !json.includes("Quit")) throw new Error("missing segmented options");
+	if (!json.includes("⏻")) throw new Error("missing power icon");
 	if (!json.includes("QoL")) throw new Error("missing page title");
-	console.log("section renders both toggles OK");
+	console.log("section renders switch + segmented control OK");
 
-	// flip the tray switch: find the Switch elements (unrendered components
-	// carry onChange + checked props) and invoke the tray one
+	// exactly one Switch (session log) and one SegmentedControl component
 	const switches = [];
+	let segmented = null;
 	const walk = (node) => {
 		if (!node || typeof node !== "object") return;
-		if (node.props && typeof node.props.onChange === "function" && "checked" in node.props) switches.push(node);
+		if (node.props) {
+			if (typeof node.props.onChange === "function" && "checked" in node.props) switches.push(node);
+			if (Array.isArray(node.props.options) && typeof node.props.onChange === "function") segmented = node;
+		}
 		if (Array.isArray(node.children)) node.children.forEach(walk);
 	};
 	walk(settled);
-	if (switches.length !== 2) throw new Error("expected 2 switches, got " + switches.length);
-	const traySwitch = switches.find((s) => String(s.props.label ?? s.props["aria-label"] ?? "").includes("tray"));
-	traySwitch.props.onChange(true);
+	if (switches.length !== 1) throw new Error("expected 1 switch, got " + switches.length);
+	if (!segmented) throw new Error("SegmentedControl not found");
+	if (segmented.props.options.length !== 2) throw new Error("expected 2 segmented options");
+	console.log("structure OK: 1 switch + segmented control with 2 options");
+
+	// select "Quit" in the segmented control -> PUT closeBehavior:"quit" + bridge call
+	segmented.props.onChange("quit");
 	setTimeout(() => {
-		if (window._bridgeCalls.length !== 1 || window._bridgeCalls[0] !== "tray") {
-			throw new Error("desktop bridge not called with 'tray': " + JSON.stringify(window._bridgeCalls));
+		if (window._bridgeCalls.length !== 1 || window._bridgeCalls[0] !== "quit") {
+			throw new Error("desktop bridge not called with 'quit': " + JSON.stringify(window._bridgeCalls));
 		}
-		console.log("tray toggle -> desktop bridge called with 'tray'");
+		console.log("segmented Quit -> desktop bridge called with 'quit'");
 		console.log("SMOKE TEST PASSED");
 	}, 50);
 }, 50);

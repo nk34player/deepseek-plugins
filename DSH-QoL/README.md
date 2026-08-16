@@ -1,19 +1,28 @@
 # DSH-QoL
 
-Quality-of-life toggles for DeepSeek Harness, in a **QoL** settings page
-(a new nav section, order 30, same DSH row/switch styling as Models/General).
+Quality-of-life controls for DeepSeek Harness, in a **QoL** settings page
+(a new nav section, order 30, same DSH row styling as Models/General).
 
-## Toggles
+## Controls
 
-### 1. Session log button
+### 1. Session log button (switch)
 Show/hide the **"Session log"** download button in the session header
 (top right). Off hides it via an injected stylesheet targeting the
 `conversation.session.header.utilities` outlet (where the shipped
 `session-log-download` entry renders).
 
-### 2. Minimize to tray on close
-- **On** = closing the window hides the app to the system tray (backend keeps running).
-- **Off** = closing the window quits the app completely.
+### 2. When closing window (segmented control)
+A Reasonix-style segmented choice, not an on/off toggle:
+
+```
+[ Keep Running ] [ Quit ]
+```
+
+- **Keep Running** (default) — closing the window hides the app to the system
+  tray; the backend keeps running. This is the installed desktop shell's
+  current behavior (verified in its `app.asar`).
+- **Quit** — closing the window quits the app completely. Needs the small
+  shell patch below, because the packaged shell currently always hides.
 
 The preference is persisted to **`~/.dsh/qol-prefs.json`** through the host
 route `GET/PUT /dsh-qol/prefs` (same-origin; no secrets cross the browser).
@@ -25,11 +34,18 @@ shell exposes that bridge.
 
 The harness web GUI runs inside the desktop shell
 ([salathleizhang/deepseek-harness-desktop](https://github.com/salathleizhang/deepseek-harness-desktop)),
-which owns the Electron `BrowserWindow`. The shell currently documents tray as
-unimplemented, so wire its main process to honor the pref file:
+which owns the Electron `BrowserWindow`. **The installed shell already has a
+tray and already hides-to-tray on close** (verified in the packaged
+`app.asar`: `lib/window-lifecycle.js` always `preventDefault()` + `hide()`
+on window close, and `lib/main.js` builds a tray menu with Open Window /
+Launch at login / Notifications / Quit). The GitHub README is stale.
+
+So "Keep Running" (tray) is the shell's current behavior — the gap is the
+**Quit** option. To make the segmented control actually quit, patch the
+shell's `lib/window-lifecycle.js` to read the pref file:
 
 ```js
-// desktop-shell electron main (window creation site)
+// desktop-shell lib/window-lifecycle.js (createDesktopLifecycle)
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -37,29 +53,29 @@ import { homedir } from "node:os";
 function readCloseBehavior() {
   try {
     const raw = JSON.parse(readFileSync(join(homedir(), ".dsh", "qol-prefs.json"), "utf8"));
-    return raw.closeBehavior === "tray" ? "tray" : "quit";
+    return raw.closeBehavior === "quit" ? "quit" : "tray";
   } catch {
-    return "quit";
+    return "tray"; // shell default: hide to tray
   }
 }
 
-win.on("close", (event) => {
-  if (readCloseBehavior() === "tray") {
-    event.preventDefault();
-    win.hide(); // keep backend running; tray menu reopens/quits
+onWindowClose(event) {
+  if (quitting) return;
+  if (readCloseBehavior() === "quit") {
+    requestQuit();        // tear down the Host and app.quit()
+    return;
   }
-});
+  event.preventDefault();
+  options.getWindow()?.hide();
+}
 ```
 
-And in the preload bridge, expose (optional — the file read above is
-authoritative either way):
+`requestQuit` is already wired in the shell (used by the tray's Quit item and
+updater install), so the close path just reuses it.
 
-```js
-contextBridge.exposeInMainWorld("dshDesktop", {
-  ...,
-  setCloseBehavior: (behavior) => ipcRenderer.send("qol:set-close-behavior", behavior)
-});
-```
+The plugin's client also calls `window.dshDesktop.setCloseBehavior(...)` when
+the shell's preload exposes such a method — the packaged preload currently
+does not, so the file read above is the authoritative channel.
 
 ## Layout
 

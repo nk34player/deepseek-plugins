@@ -71,6 +71,58 @@ window.__ModuleLoader__.load({
 				}
 			}));
 		}
+		/**
+		 * A DSH-style segmented control: one rounded border, a vertical divider
+		 * between choices, the selected option filled with the product accent.
+		 * Used for the close-behavior row (two labeled actions, not an on/off).
+		 * @param value - selected option id.
+		 * @param options - [{ id, label }].
+		 */
+		function SegmentedControl({ value, options, onChange, label, disabled }) {
+			return react.createElement("div", {
+				role: "radiogroup",
+				"aria-label": label,
+				style: {
+					boxSizing: "border-box",
+					display: "inline-flex",
+					flex: "none",
+					border: "1px solid var(--dsw-alias-border-l2)",
+					borderRadius: "999px",
+					padding: "2px",
+					background: "var(--dsw-alias-interactive-bg-hover)"
+				}
+			}, options.map((opt, index) => react.createElement("button", {
+				key: opt.id,
+				type: "button",
+				role: "radio",
+				"aria-checked": value === opt.id,
+				disabled: disabled === true,
+				onClick: () => onChange(opt.id),
+				style: {
+					boxSizing: "border-box",
+					height: "28px",
+					font: "inherit",
+					fontSize: "13px",
+					lineHeight: "28px",
+					cursor: disabled === true ? "default" : "pointer",
+					border: "none",
+					borderRadius: "999px",
+					padding: "0 14px",
+					display: "inline-flex",
+					alignItems: "center",
+					...(index > 0 && value !== opt.id
+						? { borderLeft: "1px solid var(--dsw-alias-border-l2)", borderRadius: 0 }
+						: {}),
+					background: value === opt.id
+						? "var(--dsw-alias-button-primary-fill)"
+						: "transparent",
+					color: value === opt.id
+						? "var(--dsw-alias-label-primary-foreground)"
+						: "var(--dsw-alias-label-secondary)",
+					transition: "background 150ms ease"
+				}
+			}, opt.label)));
+		}
 		/** Read current prefs from the host route. */
 		function fetchPrefs() {
 			return fetch("/dsh-qol/prefs", { headers: { Accept: "application/json" } })
@@ -189,15 +241,23 @@ window.__ModuleLoader__.load({
 					})
 				),
 				react.createElement("div", { style: ROW },
+					react.createElement("div", {
+						"aria-hidden": "true",
+						style: { flex: "none", color: "var(--dsw-alias-label-tertiary)", fontSize: "16px", lineHeight: "1" }
+					}, "⏻"),
 					textBlock(
-						"Minimize to tray on close",
-						"Closing the window hides the app to the system tray instead of quitting. Off = quit completely. (Applies in the desktop shell; it reads ~/.dsh/qol-prefs.json.)"
+						"When closing window",
+						"Choose whether DeepSeek Harness keeps running after its main window closes. The desktop shell reads ~/.dsh/qol-prefs.json."
 					),
-					react.createElement(Switch, {
-						checked: prefs === null ? false : prefs.closeBehavior === "tray",
+					react.createElement(SegmentedControl, {
+						value: prefs === null ? "quit" : prefs.closeBehavior,
 						disabled: prefs === null,
-						label: "Minimize to tray on close",
-						onChange: (value) => update({ closeBehavior: value ? "tray" : "quit" })
+						label: "When closing window",
+						options: [
+							{ id: "tray", label: "Keep Running" },
+							{ id: "quit", label: "Quit" }
+						],
+						onChange: (value) => update({ closeBehavior: value })
 					})
 				)
 			);
