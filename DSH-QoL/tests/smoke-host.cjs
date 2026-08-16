@@ -22,11 +22,28 @@ const { pathToFileURL } = require("url");
 		{ id: "mcp-roblox-studio", options: { name: "@deepseek-ai/dsh-mcp-client" }, disabled: false, fiber: { state: 3 } }, // FAILED
 		{ id: "mcp-tavily", options: { name: "@deepseek-ai/dsh-mcp-client" }, disabled: true, fiber: void 0 }, // disabled row
 	];
+	// fake tool registry with a global layer exposing mcp__<server>__<tool> names
+	const fakeTools = {
+		layers: {
+			global: {
+				tools: {
+					entries: () => [
+						["mcp__context7__query-docs", {}],
+						["mcp__context7__resolve-library-id", {}],
+						["mcp__fff__find_files", {}],
+						["mcp__other__foo", {}],
+						["some-global-tool", {}]
+					]
+				}
+			}
+		}
+	};
 	const routes = [];
 	const ctx = {
 		effect: (fn) => { const d = fn(); if (typeof d === "function") d(); },
 		webServer: { register: (r) => { routes.push(r); return () => {}; } },
-		loader: { entries: () => loaderEntries }
+		loader: { entries: () => loaderEntries },
+		tools: fakeTools
 	};
 	mod.apply(ctx);
 	if (routes.length !== 2) throw new Error("expected 2 routes, got " + routes.length);
@@ -64,7 +81,11 @@ const { pathToFileURL } = require("url");
 	}
 	const roblox = servers.find((s) => s.id === "mcp-roblox-studio");
 	if (roblox.status !== "error") throw new Error("bad roblox status: " + roblox.status);
-	console.log("MCP list OK:", servers.map((s) => `${s.serverName}:${s.status}`).join(", "));
+	// tool enumeration from the fake registry
+	if (!Array.isArray(context7.toolNames) || context7.toolNames.length !== 2) throw new Error("bad context7 toolNames: " + JSON.stringify(context7.toolNames));
+	if (!context7.toolNames.includes("query-docs") || !context7.toolNames.includes("resolve-library-id")) throw new Error("context7 toolNames wrong");
+	if (roblox.toolNames !== null) throw new Error("roblox should have null toolNames (no tools registered)");
+	console.log("MCP list OK:", servers.map((s) => `${s.serverName}:${s.status}(${Array.isArray(s.toolNames) ? s.toolNames.length : "?"} tools)`).join(", "));
 
 	// --- toggle disable context7 (writes stub file) ---
 	r = await call(mcpRoute, "PUT", "/dsh-qol/mcp/mcp-context7", { enabled: false });

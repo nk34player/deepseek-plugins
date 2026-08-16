@@ -297,7 +297,7 @@ window.__ModuleLoader__.load({
 			);
 		}
 		/** The MCP server list screen. */
-		function McpListView({ servers, loading, error, onOpen, onToggle, onRemove }) {
+		function McpListView({ servers, loading, error, onOpen, onToggle, onRemove, onBack }) {
 			const sectionStyle = {
 				maxWidth: "720px",
 				color: "var(--dsw-alias-label-primary)",
@@ -306,6 +306,11 @@ window.__ModuleLoader__.load({
 				gap: "12px"
 			};
 			return react.createElement("div", { style: sectionStyle },
+				react.createElement("button", {
+					type: "button",
+					onClick: onBack,
+					style: { alignSelf: "flex-start", background: "none", border: "none", color: "var(--dsw-alias-label-primary)", cursor: "pointer", padding: "0", fontSize: "13px", lineHeight: "20px" }
+				}, "← Back to QoL"),
 				react.createElement("div", null,
 					react.createElement("h2", { style: { color: "var(--dsw-alias-label-primary)", margin: "0", fontSize: "16px", fontWeight: "500", lineHeight: "24px" } },
 						"Global MCP ", servers.length),
@@ -400,10 +405,26 @@ window.__ModuleLoader__.load({
 						: react.createElement("button", { type: "button", onClick: () => setConfirmRemove(true), style: buttonStyle("secondary") }, "Remove server")
 				),
 				react.createElement("div", { style: { border: "1px dashed var(--dsw-alias-border-l3)", borderRadius: "8px", padding: "14px" } },
-					react.createElement("div", { style: { color: "var(--dsw-alias-label-primary)", fontSize: "13px", fontWeight: "500", lineHeight: "20px" } },
-						"This connection did not return tool details."),
-					react.createElement("p", { style: { color: "var(--dsw-alias-label-tertiary)", margin: "4px 0 0", fontSize: "12px", lineHeight: "18px" } },
-						"The server may expose resources or prompts instead of tools, or discovery may not have completed.")
+					Array.isArray(server.toolNames) && server.toolNames.length > 0
+						? react.createElement(react.Fragment, null,
+							react.createElement("div", { style: { color: "var(--dsw-alias-label-primary)", fontSize: "13px", fontWeight: "500", lineHeight: "20px" } },
+								`${server.toolNames.length} tool${server.toolNames.length === 1 ? "" : "s"}:`),
+							react.createElement("div", { style: { display: "flex", flexDirection: "column", gap: "2px", marginTop: "6px" } },
+								server.toolNames.map((tool) => react.createElement("code", {
+									key: tool,
+									style: { ...MONO, color: "var(--dsw-alias-label-secondary)", wordBreak: "break-all" }
+								}, `mcp__${server.serverName}__${tool}`)))
+						)
+						: react.createElement(react.Fragment, null,
+							react.createElement("div", { style: { color: "var(--dsw-alias-label-primary)", fontSize: "13px", fontWeight: "500", lineHeight: "20px" } },
+								Array.isArray(server.toolNames)
+									? "This server registered no tools."
+									: "This connection did not return tool details."),
+							react.createElement("p", { style: { color: "var(--dsw-alias-label-tertiary)", margin: "4px 0 0", fontSize: "12px", lineHeight: "18px" } },
+								Array.isArray(server.toolNames)
+									? "The server may expose resources or prompts instead of tools."
+									: "Tool discovery has not completed — the server may be starting, disabled, or unreachable.")
+						)
 				)
 			);
 		}
@@ -530,16 +551,13 @@ window.__ModuleLoader__.load({
 					servers,
 					loading,
 					error,
-					onOpen: (id) => setView("mcp:" + id),
+					onBack: () => setView("prefs"),
+					onOpen: (id) => { setConfirmRemove(false); setView("mcp:" + id); },
 					onToggle: toggleServer,
 					onRemove: (id) => {
-						// list-level remove: immediate with confirmation is on detail; here ask inline
-						if (confirmRemove === id) {
-							removeServer(id);
-						} else {
-							setConfirmRemove(id);
-							setTimeout(() => setConfirmRemove(false), 3000);
-						}
+						// removal confirmation lives on the detail screen
+						setConfirmRemove(false);
+						setView("mcp:" + id);
 					}
 				});
 			}

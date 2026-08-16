@@ -25,8 +25,8 @@ import { homedir } from "node:os";
 
 /** Cordis plugin name. */
 const name = "dsh-qol";
-/** Required services: the web route registry and the Loader (runtime state). */
-const inject = ["webServer", "loader"];
+/** Required services: the web route registry, the Loader (runtime state), and the tool registry. */
+const inject = ["webServer", "loader", "tools"];
 
 /** Resolve the harness home (env override, else ~/.dsh). */
 function dshHome() {
@@ -185,8 +185,42 @@ function statusOf(row, runtime) {
 	}
 }
 
+/**
+ * Enumerate the registered tool names for one MCP server from the live tool
+ * registry (`mcp__<serverName>__<rawName>`). The registry's layers are
+ * TS-private but plain at runtime; reads are defensive — any failure yields
+ * null (unknown), never a crash.
+ * @param tools - the ToolRuntime service (injected).
+ * @param serverName - the MCP server namespace.
+ * @returns tool names without the prefix, or null when enumeration failed.
+ */
+function toolsFor(tools, serverName) {
+	if (tools === null || tools === void 0) return null;
+	try {
+		const prefix = `mcp__${serverName}__`;
+		const names = [];
+		const layers = tools.layers;
+		if (!layers || typeof layers !== "object") return null;
+		const candidates = [layers.global, layers.active];
+		for (const layer of candidates) {
+			if (!layer || typeof layer.tools?.entries !== "function") continue;
+			for (const [name] of layer.tools.entries()) {
+				if (typeof name === "string" && name.startsWith(prefix)) names.push(name.slice(prefix.length));
+			}
+		}
+		return names.length > 0 ? [...new Set(names)].sort() : null;
+	} catch {
+		return null;
+	}
+}
+
+/** The server namespace name for a row. */
+function serverNameOf(row) {
+	return row.config.serverName || row.id.replace(/^mcp-/, "");
+}
+
 /** Build one client-facing server record. */
-function serverView(row, runtime) {
+function serverView(row, runtime, tools) {
 	const cfg = row.config;
 	const command = [cfg.command, ...(Array.isArray(cfg.args) ? cfg.args : [])]
 		.filter((part) => part !== void 0 && part !== "")
@@ -195,9 +229,10 @@ function serverView(row, runtime) {
 		? Object.keys(cfg.env)
 		: [];
 	const status = statusOf(row, runtime);
+	const serverName = serverNameOf(row);
 	return {
 		id: row.id,
-		serverName: cfg.serverName || row.id.replace(/^mcp-/, ""),
+		serverName,
 		transport: cfg.transport || "stdio",
 		commandPreview: scrubCommand(command).slice(0, 140),
 		command: scrubCommand(command),
@@ -205,7 +240,8 @@ function serverView(row, runtime) {
 		disabled: row.disabled,
 		enabled: !row.disabled,
 		status: status.text,
-		tone: status.tone
+		tone: status.tone,
+		toolNames: toolsFor(tools, serverName)
 	};
 }
 
@@ -242,7 +278,7 @@ function runtimeMap(ctx) {
 function readMcpList(ctx) {
 	const { rows } = readMcpRows();
 	const runtime = runtimeMap(ctx);
-	return rows.map((row) => serverView(row, runtime.get(row.id)));
+	return rows.map((row) => serverView(row, runtime.get(row.id), ctx.tools));
 }
 
 /** Toggle one row's `disabled` flag in the patch file (applies on restart). */
