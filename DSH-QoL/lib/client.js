@@ -619,8 +619,23 @@ window.__ModuleLoader__.load({
 
 		/** Cordis plugin name (client side). */
 		const name = "dsh-qol";
+		/**
+		 * Apply prefs at launch (independent of the settings page). The only
+		 * launch-visible pref today is the session-log-button visibility,
+		 * injected as a stylesheet as soon as prefs are read.
+		 */
+		function applyPrefsOnLaunch() {
+			if (typeof window === "undefined" || window === null) return;
+			fetchPrefs()
+				.then((prefs) => {
+					if (prefs === null) return;
+					applySessionLogButton(prefs.sessionLogButton !== false);
+				})
+				.catch(() => { /* prefs apply lazily when the settings page opens */ });
+		}
 		/** Register the QoL settings page (a new nav section, order 30). */
 		function apply(ctx) {
+			applyPrefsOnLaunch();
 			const slots = ctx.get("slots");
 			if (slots === undefined) return;
 			slots.inject("settings.section", () => slots.register({
