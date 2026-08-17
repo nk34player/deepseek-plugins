@@ -14,7 +14,8 @@ your custom providers' live balances.
   - Session-scoped — costs never bleed across sessions.
 - **Cost Tracker settings page** — lists every custom provider from
   `~/.dsh/settings.yaml` with its **Custom** tag, live balance, and a
-  **Refresh** button per row.
+  **Refresh** button per row. Each row's Refresh fetches **only that provider**
+  (the other balances and their errors stay put).
   - Balances come from each provider's `/v1/usage` endpoint, called by the host
     half. Your API key never leaves the machine.
 

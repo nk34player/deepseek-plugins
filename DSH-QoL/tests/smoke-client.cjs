@@ -32,9 +32,7 @@ if (!captured) throw new Error("bundle did not call __ModuleLoader__.load");
 if (captured.id !== "@deepseek-ai/dsh-qol") throw new Error("bad id: " + captured.id);
 
 // --- stub fetch BEFORE apply: applyPrefsOnLaunch() runs inside apply() ---
-// The launch apply retries when the fetch fails (host route still booting);
-// here the route is always up so the first attempt must succeed.
-const PREF_GET = { sessionLogButton: false, controlBackgroundJobs: true };
+const PREF_GET = { sessionLogButton: false };
 const MCP_SERVERS = [
 	{ id: "mcp-context7", serverName: "context7", transport: "stdio", command: "node server.js --key ********", commandPreview: "node server.js --key ********", envKeys: ["CONTEXT7_API_KEY"], enabled: true, status: "available · running", tone: "available" },
 	{ id: "mcp-tavily", serverName: "tavily", transport: "stdio", command: "node proxy.js", commandPreview: "node proxy.js", envKeys: [], enabled: false, status: "disabled", tone: "disabled" }
@@ -61,10 +59,7 @@ global.fetch = async (url, init) => {
 		return { ok: true, json: async () => ({ ok: true, prefs: PREF_GET }) };
 	}
 	const body = JSON.parse(init.body);
-	return { ok: true, json: async () => ({
-		ok: true,
-		prefs: { sessionLogButton: body.sessionLogButton ?? true, controlBackgroundJobs: body.controlBackgroundJobs ?? true }
-	}) };
+	return { ok: true, json: async () => ({ ok: true, prefs: { sessionLogButton: body.sessionLogButton ?? true } }) };
 };
 
 const mod = captured.factory((spec) => {
@@ -74,24 +69,25 @@ const mod = captured.factory((spec) => {
 if (mod.name !== "dsh-qol") throw new Error("bad name");
 if (typeof mod.apply !== "function") throw new Error("bad apply");
 
-// --- run apply with a slots stub ---
+// --- run apply with a slots stub (settings.section + sidebar.footer.action) ---
 const registrations = [];
 const slots = {
-	inject: (name, cb) => { if (name !== "settings.section") throw new Error("bad slot " + name); cb(); },
+	inject: (name, cb) => {
+		if (name !== "settings.section" && name !== "sidebar.footer.action") throw new Error("bad slot " + name);
+		cb();
+	},
 	register: (opts, comp) => registrations.push({ opts, comp })
 };
 mod.apply({ get: (n) => (n === "slots" ? slots : undefined) });
-if (registrations.length !== 1) throw new Error("expected 1 registration");
-const reg = registrations[0];
-if (reg.opts.id !== "qol" || reg.opts.order !== 30 || reg.opts.label !== "QoL") throw new Error("bad registration opts");
-console.log("registration OK: settings.section id=qol order=30");
-
-// applyPrefsOnLaunch: the launch fetch resolves (pref says sessionLogButton=false),
-// so a stylesheet hiding the session-log button is injected once microtasks run
-// (asserted inside the setTimeout below).
+if (registrations.length !== 2) throw new Error("expected 2 registrations, got " + registrations.length);
+const secReg = registrations.find((r) => r.opts.id === "qol");
+const actionReg = registrations.find((r) => r.opts.id === "background-jobs");
+if (!secReg || secReg.opts.order !== 30 || secReg.opts.label !== "QoL") throw new Error("bad settings registration");
+if (!actionReg || actionReg.opts.name !== "sidebar.footer.action" || actionReg.opts.order !== 10) throw new Error("bad footer-action registration");
+console.log("registration OK: settings.section id=qol order=30 + sidebar.footer.action id=background-jobs");
 
 reactStub.__reset();
-const tree = reg.comp({ close: () => {} });
+const tree = secReg.comp({ close: () => {} });
 hookStore.effects.forEach((fn) => fn());
 
 setTimeout(() => {
@@ -102,18 +98,18 @@ setTimeout(() => {
 	console.log("launch apply OK: session-log button hidden via injected stylesheet");
 
 	reactStub.__beginRender();
-	const settled = reg.comp({ close: () => {} });
+	const settled = secReg.comp({ close: () => {} });
 	const json = JSON.stringify(settled);
 	if (!json.includes("Session log button")) throw new Error("missing session-log row");
-	if (!json.includes("Control Background Jobs")) throw new Error("missing control-background-jobs row");
-	if (!json.includes("Background jobs")) throw new Error("missing background-jobs manager row");
 	if (!json.includes("QoL")) throw new Error("missing page title");
+	// background jobs moved out of settings: no toggle, no manager row, no close-behavior control
+	if (json.includes("Control Background Jobs")) throw new Error("control-background-jobs toggle should be removed from settings");
 	if (json.includes("When closing window") || json.includes("Keep Running") || json.includes("Quit")) {
 		throw new Error("close-behavior control should be removed");
 	}
-	console.log("section renders session-log + control-background-jobs switches + manager row OK");
+	console.log("settings renders session-log switch only (jobs moved out) OK");
 
-	// exactly two Switches (session log + control background jobs), no SegmentedControl
+	// exactly one Switch (session log), no SegmentedControl
 	const switches = [];
 	const walk = (node) => {
 		if (!node || typeof node !== "object") return;
@@ -124,12 +120,12 @@ setTimeout(() => {
 		if (Array.isArray(node.children)) node.children.forEach(walk);
 	};
 	walk(settled);
-	if (switches.length !== 2) throw new Error("expected 2 switches, got " + switches.length);
-	console.log("structure OK: 2 switches");
+	if (switches.length !== 1) throw new Error("expected 1 switch, got " + switches.length);
+	console.log("structure OK: 1 switch in settings");
 
-	// --- MCP manager: open the list view ---
+	// --- MCP manager: open the list view (still in settings) ---
 	reactStub.__beginRender();
-	const listTree = reg.comp({ close: () => {} });
+	const listTree = secReg.comp({ close: () => {} });
 	const walk2 = (node, out) => {
 		if (!node || typeof node !== "object") return;
 		if (node.props && typeof node.props.onClick === "function") out.push(node);
@@ -137,46 +133,46 @@ setTimeout(() => {
 	};
 	const clickables = [];
 	walk2(listTree, clickables);
-	// the MCP servers row is the div with onClick that switches view
 	const mcpNav = clickables.find((n) => JSON.stringify(n).includes("MCP servers"));
 	if (!mcpNav) throw new Error("MCP servers row not found");
 	mcpNav.props.onClick();
 	setTimeout(() => {
 		reactStub.__beginRender();
-		const mcpList = reg.comp({ close: () => {} });
-		// McpListView is a component element; find it by its props shape
+		const mcpList = secReg.comp({ close: () => {} });
 		const mcpViewEl = findElement(mcpList, (n) => n.props && Array.isArray(n.props.servers) && n.props.servers.length === 2);
 		if (!mcpViewEl) throw new Error("McpListView not rendered with servers");
 		if (mcpViewEl.props.servers[0].serverName !== "context7") throw new Error("context7 missing");
 		if (mcpViewEl.props.servers[1].status !== "disabled") throw new Error("tavily status wrong");
 		console.log("MCP list view OK: servers =", mcpViewEl.props.servers.map((s) => s.serverName).join(", "));
 
-		// --- Background-jobs manager: back to prefs, open the jobs view ---
-		mcpViewEl.props.onBack();
-		reactStub.__beginRender();
-		const prefsAgain = reg.comp({ close: () => {} });
-		const walk3 = (node, out) => {
-			if (!node || typeof node !== "object") return;
-			if (node.props && typeof node.props.onClick === "function") out.push(node);
-			if (Array.isArray(node.children)) node.children.forEach((c) => walk3(c, out));
-		};
-		const clickables3 = [];
-		walk3(prefsAgain, clickables3);
-		const jobsNav = clickables3.find((n) => JSON.stringify(n).includes("Background jobs") && !JSON.stringify(n).includes("Control Background Jobs"));
-		if (!jobsNav) throw new Error("Background jobs row not found");
-		jobsNav.props.onClick();
+		// --- Background-jobs footer action: render, click to open the modal, terminate ---
+		reactStub.__reset();
+		const actionTree = actionReg.comp({ wide: true });
+		hookStore.effects.forEach((fn) => fn());
 		setTimeout(() => {
 			reactStub.__beginRender();
-			const jobsTree = reg.comp({ close: () => {} });
-			const jobsViewEl = findElement(jobsTree, (n) => n.props && Array.isArray(n.props.jobs) && n.props.jobs.length === 2);
-			if (!jobsViewEl) throw new Error("JobListView not rendered with jobs");
-			if (jobsViewEl.props.jobs[0].id !== "bash-1" || jobsViewEl.props.jobs[1].status !== "completed") throw new Error("jobs data wrong");
-			// terminate a live job -> POST /dsh-qol/jobs with the job id
-			jobsViewEl.props.onTerminate({ id: "bash-1", ownerSession: undefined });
+			const actionSettled = actionReg.comp({ wide: true });
+			const actionJson = JSON.stringify(actionSettled);
+			if (!actionJson.includes("Background jobs")) throw new Error("footer action missing label");
+			// click the trigger button -> opens the modal (fetch jobs)
+			const trigger = findElement(actionSettled, (n) => n.props && typeof n.props.onClick === "function" && n.props["aria-label"] === "Background jobs");
+			if (!trigger) throw new Error("trigger button not found");
+			trigger.props.onClick();
 			setTimeout(() => {
-				if (!killedIds.includes("bash-1")) throw new Error("terminate did not POST");
-				console.log("jobs view OK: list + terminate routed");
-				console.log("SMOKE TEST PASSED");
+				reactStub.__beginRender();
+				const opened = actionReg.comp({ wide: true });
+				// JobsModal is a component element; find it by its props shape
+				const modal = findElement(opened, (n) => n.props && Array.isArray(n.props.jobs) && n.props.jobs.length === 2);
+				if (!modal) throw new Error("jobs modal not rendered");
+				if (modal.props.jobs[0].id !== "bash-1" || modal.props.jobs[1].status !== "completed") throw new Error("jobs data wrong in modal");
+				console.log("jobs modal OK: list rendered after clicking footer action");
+				// terminate a live job via the modal's onTerminate prop -> POST /dsh-qol/jobs
+				modal.props.onTerminate({ id: "bash-1", ownerSession: undefined });
+				setTimeout(() => {
+					if (!killedIds.includes("bash-1")) throw new Error("terminate did not POST");
+					console.log("terminate routed OK from modal");
+					console.log("SMOKE TEST PASSED");
+				}, 20);
 			}, 20);
 		}, 20);
 	}, 50);

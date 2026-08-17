@@ -215,22 +215,40 @@ window.__ModuleLoader__.load({
 			const [state, setState] = react.useState(() => costTrackerCache !== null
 				? { status: "ready", rows: costTrackerCache, error: null }
 				: { status: "loading", rows: [], error: null });
-			const load = react.useCallback(() => {
+			const [refreshing, setRefreshing] = react.useState(null);
+			const load = react.useCallback((onlyProvider) => {
+				const q = onlyProvider !== undefined
+					? `?provider=${encodeURIComponent(onlyProvider)}`
+					: "";
+				setRefreshing(onlyProvider !== undefined ? onlyProvider : null);
 				setState((prev) => ({ status: "loading", rows: prev.rows, error: null }));
-				fetch("/cost-tracker/balance", { headers: { Accept: "application/json" } })
+				fetch(`/cost-tracker/balance${q}`, { headers: { Accept: "application/json" } })
 					.then((res) => {
 						if (!res.ok) throw new Error(`HTTP ${res.status}`);
 						return res.json();
 					})
 					.then((json) => {
-						costTrackerCache = json.providers ?? [];
-						setState({ status: "ready", rows: costTrackerCache, error: null });
+						const fresh = json.providers ?? [];
+						costTrackerCache = fresh;
+						setState((prev) => {
+							// Per-row refresh replaces only that provider's row so the
+							// other balances (and their errors) stay put.
+							if (onlyProvider !== undefined) {
+								const rows = prev.rows.map((row) =>
+									row.provider === onlyProvider
+										? fresh.find((f) => f.provider === onlyProvider) ?? row
+										: row);
+								return { status: "ready", rows, error: null };
+							}
+							return { status: "ready", rows: fresh, error: null };
+						});
 					})
 					.catch((err) => setState((prev) => ({
 						status: "error",
 						rows: prev.rows,
 						error: err instanceof Error ? err.message : String(err)
-					})));
+					})))
+					.finally(() => setRefreshing(null));
 			}, []);
 			react.useEffect(() => { load(); }, [load]);
 
@@ -290,9 +308,9 @@ window.__ModuleLoader__.load({
 								react.createElement("button", {
 									type: "button",
 									style: refreshStyle,
-									disabled: state.status === "loading",
-									onClick: load
-								}, state.status === "loading" ? "…" : "Refresh")
+									disabled: refreshing !== null,
+									onClick: () => load(row.provider)
+								}, refreshing === row.provider ? "…" : "Refresh")
 							))
 				)
 			);

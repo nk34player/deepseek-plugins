@@ -38,5 +38,21 @@ const path = require("path");
 	if (!qyk) throw new Error("qyk888 not found in providers");
 	if (typeof qyk.balance !== "number" || qyk.balance <= 0) throw new Error("bad balance: " + JSON.stringify(qyk));
 	if (qyk.error) throw new Error("qyk888 errored: " + qyk.error);
+
+	// per-provider refresh: ?provider=qyk888 must return exactly one row
+	let onlyStatus = 0, onlyBody = "";
+	const onlyRes = {
+		writeHead: (s) => { onlyStatus = s; },
+		end: (b) => { onlyBody = b; }
+	};
+	await route.handler({ method: "GET", url: "/cost-tracker/balance?provider=qyk888" }, onlyRes);
+	if (onlyStatus !== 200) throw new Error("bad only-status " + onlyStatus);
+	const onlyJson = JSON.parse(onlyBody);
+	if (!Array.isArray(onlyJson.providers) || onlyJson.providers.length !== 1) {
+		throw new Error("provider filter should return 1 row, got " + JSON.stringify(onlyJson.providers));
+	}
+	if (onlyJson.providers[0].provider !== "qyk888") throw new Error("wrong provider in filtered row");
+	console.log("per-provider refresh OK (1 row for qyk888)");
+
 	console.log("HOST SMOKE TEST PASSED (balance =", qyk.balance, qyk.unit + ")");
 })().catch((e) => { console.error("HOST SMOKE TEST FAILED:", e); process.exit(1); });

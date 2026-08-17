@@ -139,8 +139,10 @@ async function fetchBalance(baseURL, key) {
 }
 
 /**
- * Mount the balance route: GET /cost-tracker/balance → JSON list of every
- * custom provider with its live account balance.
+ * Mount the balance route: GET /cost-tracker/balance → JSON list of custom
+ * providers with live balances. An optional `?provider=<id>` query refreshes
+ * only that one provider (the per-row Refresh button), otherwise every custom
+ * provider is refreshed.
  * @param ctx - host plugin context carrying webServer.
  */
 function apply(ctx) {
@@ -153,7 +155,12 @@ function apply(ctx) {
 				res.end();
 				return;
 			}
-			const providers = readProviders().filter((p) => p.baseURL && p.apiKeyEnv);
+			const url = new URL(req.url ?? "/", "http://x");
+			const only = url.searchParams.get("provider");
+			let providers = readProviders().filter((p) => p.baseURL && p.apiKeyEnv);
+			if (only !== null && only !== "") {
+				providers = providers.filter((p) => p.provider === only);
+			}
 			const creds = readCredentials();
 			const rows = [];
 			for (const provider of providers) {
