@@ -394,6 +394,140 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region Background-jobs manager
+		/** Fetch the background-job list. */
+		function fetchJobs() {
+			return fetch("/dsh-qol/jobs", { headers: { Accept: "application/json" } })
+				.then((res) => {
+					if (!res.ok) throw new Error(`HTTP ${res.status}`);
+					return res.json();
+				})
+				.then((json) => json.jobs ?? []);
+		}
+		/** Terminate one background job; resolves with the refreshed list. */
+		function killJob(id, sessionId) {
+			return fetch("/dsh-qol/jobs", {
+				method: "POST",
+				headers: { "Content-Type": "application/json", Accept: "application/json" },
+				body: JSON.stringify({ id, ...(sessionId !== undefined && sessionId !== null ? { sessionId } : {}) })
+			}).then((res) => {
+				if (!res.ok) throw new Error(`HTTP ${res.status}`);
+				return res.json();
+			});
+		}
+		/** Status-dot tone for a job status (warning for in-flight/killed, error for failed). */
+		const JOB_TONE = {
+			running: "starting",
+			stopping: "starting",
+			completed: "available",
+			killed: "disabled",
+			failed: "error"
+		};
+		/** One row in the background-job list. */
+		function JobRow({ job, onTerminate }) {
+			const live = job.status === "running" || job.status === "stopping";
+			return react.createElement("div", {
+				style: {
+					display: "flex",
+					alignItems: "center",
+					gap: "10px",
+					padding: "10px 14px",
+					borderBottom: "1px solid var(--dsw-alias-border-l2)"
+				}
+			},
+				react.createElement("span", {
+					"aria-hidden": "true",
+					style: { width: "7px", height: "7px", borderRadius: "999px", background: TONE[JOB_TONE[job.status] ?? "unknown"], flex: "none" }
+				}),
+				react.createElement("div", { style: { minWidth: "0", flex: "1" } },
+					react.createElement("div", { style: { display: "flex", alignItems: "center", gap: "6px" } },
+						react.createElement("span", {
+							style: {
+								border: "1px solid var(--dsw-alias-border-l3)",
+								color: "var(--dsw-alias-label-secondary)",
+								borderRadius: "999px",
+								padding: "0 6px",
+								fontSize: "10px",
+								lineHeight: "15px",
+								flex: "none"
+							}
+						}, job.kind),
+						react.createElement("span", { style: { color: "var(--dsw-alias-label-secondary)", fontSize: "11px", lineHeight: "16px", flex: "none" } }, job.id)
+					),
+					react.createElement("div", {
+						title: job.label,
+						style: { ...MONO, color: "var(--dsw-alias-label-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", marginTop: "3px" }
+					}, job.label),
+					react.createElement("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginTop: "3px" } },
+						react.createElement("span", { style: DESC }, job.status + (job.detail !== undefined ? ` · ${job.detail}` : "")),
+						job.ownerSession === undefined
+							? react.createElement("span", { style: DESC }, "unowned")
+							: react.createElement("span", { style: DESC }, "session " + job.ownerSession.slice(0, 8)),
+						react.createElement("span", { style: DESC }, "started " + new Date(job.startedAt).toLocaleTimeString())
+					)
+				),
+				live
+					? react.createElement("button", {
+						type: "button",
+						style: buttonStyle("secondary"),
+						onClick: () => onTerminate(),
+						"aria-label": `Terminate ${job.id}`
+					}, "Terminate")
+					: react.createElement("span", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: "12px" } }, job.finishedAt !== undefined
+						? "ended " + new Date(job.finishedAt).toLocaleTimeString()
+						: "")
+			);
+		}
+		/** The background-job manager screen. */
+		function JobListView({ jobs, loading, error, onBack, onTerminate, onTerminateAll }) {
+			const sectionStyle = {
+				maxWidth: "720px",
+				color: "var(--dsw-alias-label-primary)",
+				display: "flex",
+				flexDirection: "column",
+				gap: "12px"
+			};
+			const live = jobs.filter((j) => j.status === "running" || j.status === "stopping");
+			return react.createElement("div", { style: sectionStyle },
+				react.createElement("button", {
+					type: "button",
+					onClick: onBack,
+					style: { alignSelf: "flex-start", background: "none", border: "none", color: "var(--dsw-alias-label-primary)", cursor: "pointer", padding: "0", fontSize: "13px", lineHeight: "20px" }
+				}, "← Back to QoL"),
+				react.createElement("div", null,
+					react.createElement("h2", { style: { color: "var(--dsw-alias-label-primary)", margin: "0", fontSize: "16px", fontWeight: "500", lineHeight: "24px" } },
+						"Background jobs"),
+					react.createElement("p", { style: { color: "var(--dsw-alias-label-tertiary)", margin: "2px 0 0", fontSize: "13px", lineHeight: "20px" } },
+						"Jobs this session can see. Terminate one to stop it and skip waiting for its result.")
+				),
+				error === null ? null : react.createElement("p", { style: { color: "var(--dsw-alias-state-error-primary)", margin: "0", fontSize: "13px", lineHeight: "20px" } }, error),
+				react.createElement("div", {
+					style: {
+						border: "1px solid var(--dsw-alias-border-l2)",
+						borderRadius: "8px",
+						overflow: "hidden",
+						background: "var(--dsw-alias-bg-secondary, transparent)"
+					}
+				},
+					loading && jobs.length === 0
+						? react.createElement("div", { style: { padding: "16px 14px", color: "var(--dsw-alias-label-tertiary)", fontSize: "13px" } }, "Loading jobs…")
+						: jobs.length === 0
+							? react.createElement("div", { style: { padding: "16px 14px", color: "var(--dsw-alias-label-tertiary)", fontSize: "13px" } }, "No background jobs.")
+							: jobs.map((job) => react.createElement(JobRow, {
+								key: job.id,
+								job,
+								onTerminate: () => onTerminate(job)
+							}))
+				),
+				live.length > 0
+					? react.createElement("div", { style: { display: "flex", justifyContent: "flex-end" } },
+						react.createElement("button", { type: "button", onClick: onTerminateAll, style: buttonStyle("secondary") },
+							`Terminate all running (${live.length})`))
+					: null
+			);
+		}
+		//#endregion
+
 		/**
 		 * The QoL settings page: prefs rows plus an MCP server manager with
 		 * list and detail views (in-page navigation).
@@ -401,10 +535,12 @@ window.__ModuleLoader__.load({
 		function QolSection(props) {
 			const [prefs, setPrefs] = react.useState(null);
 			const [error, setError] = react.useState(null);
-			const [view, setView] = react.useState("prefs"); // prefs | mcp | mcp:<id>
+			const [view, setView] = react.useState("prefs"); // prefs | mcp | mcp:<id> | jobs
 			const [servers, setServers] = react.useState([]);
 			const [loading, setLoading] = react.useState(false);
 			const [confirmRemove, setConfirmRemove] = react.useState(false);
+			const [jobs, setJobs] = react.useState([]);
+			const [jobsLoading, setJobsLoading] = react.useState(false);
 
 			react.useEffect(() => {
 				let alive = true;
@@ -456,6 +592,47 @@ window.__ModuleLoader__.load({
 					.catch((err) => setError(err instanceof Error ? err.message : String(err)));
 			};
 
+			const refreshJobs = () => {
+				setJobsLoading(true);
+				fetchJobs()
+					.then((list) => { setJobs(list); setError(null); })
+					.catch((err) => setError(err instanceof Error ? err.message : String(err)))
+					.finally(() => setJobsLoading(false));
+			};
+
+			const terminateJob = (job) => {
+				killJob(job.id, job.ownerSession)
+					.then((json) => { setJobs(json.jobs ?? jobs); setError(null); })
+					.catch((err) => setError(err instanceof Error ? err.message : String(err)));
+			};
+
+			const terminateAllJobs = () => {
+				const live = jobs.filter((j) => j.status === "running" || j.status === "stopping");
+				if (live.length === 0) return;
+				let remaining = live.length;
+				let updated = jobs;
+				live.forEach((job) => {
+					killJob(job.id, job.ownerSession)
+						.then((json) => {
+							updated = json.jobs ?? updated;
+							remaining -= 1;
+							if (remaining === 0) { setJobs(updated); setError(null); }
+						})
+						.catch((err) => {
+							remaining -= 1;
+							setError(err instanceof Error ? err.message : String(err));
+						});
+				});
+			};
+
+			// poll while the jobs view is open so statuses stay live
+			react.useEffect(() => {
+				if (view !== "jobs") return;
+				refreshJobs();
+				const timer = setInterval(refreshJobs, 1500);
+				return () => { clearInterval(timer); };
+			}, [view]);
+
 			const sectionStyle = {
 				maxWidth: "720px",
 				color: "var(--dsw-alias-label-primary)",
@@ -501,6 +678,17 @@ window.__ModuleLoader__.load({
 					}
 				});
 			}
+			// Background-jobs view
+			if (view === "jobs") {
+				return react.createElement(JobListView, {
+					jobs,
+					loading: jobsLoading,
+					error,
+					onBack: () => setView("prefs"),
+					onTerminate: terminateJob,
+					onTerminateAll: terminateAllJobs
+				});
+			}
 			// prefs view
 			return react.createElement("div", { style: sectionStyle },
 				react.createElement("h2", { style: titleStyle }, "QoL"),
@@ -518,6 +706,36 @@ window.__ModuleLoader__.load({
 						onChange: (value) => update({ sessionLogButton: value })
 					})
 				),
+				react.createElement("div", { style: ROW },
+					textBlock(
+						"Control Background Jobs",
+						"List background jobs and terminate the ones you want to skip."
+					),
+					react.createElement(Switch, {
+						checked: prefs === null ? false : prefs.controlBackgroundJobs !== false,
+						disabled: prefs === null,
+						label: "Control Background Jobs",
+						onChange: (value) => update({ controlBackgroundJobs: value })
+					})
+				),
+				(prefs !== null && prefs.controlBackgroundJobs !== false)
+					? react.createElement("div", {
+						style: { ...ROW, cursor: "pointer" },
+						role: "button",
+						tabIndex: 0,
+						onClick: () => { refreshJobs(); setView("jobs"); }
+					},
+						react.createElement("div", {
+							"aria-hidden": "true",
+							style: { flex: "none", color: "var(--dsw-alias-label-tertiary)", fontSize: "16px", lineHeight: "1" }
+						}, "⟳"),
+						textBlock(
+							"Background jobs",
+							"View running background jobs and terminate the ones you want to skip."
+						),
+						react.createElement("span", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: "14px" } }, "❯")
+					)
+					: null,
 				react.createElement("div", {
 					style: { ...ROW, cursor: "pointer" },
 					role: "button",

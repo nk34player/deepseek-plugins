@@ -13,11 +13,29 @@ Show/hide the **"Session log"** download button in the session header
 
 The preference is persisted to **`~/.dsh/qol-prefs.json`** and applied
 **at launch** — the client re-reads the pref when the app boots (retrying
-until the host route responds) and whenever the settings page opens. The
-desktop shell always hides to tray on window close; there is no quit/close
-behavior option.
+until the host route responds) and whenever the settings page opens.
 
-### 2. MCP servers (manager)
+### 2. Control Background Jobs (toggle) + Background jobs manager
+A persisted **"Control Background Jobs"** toggle (default on). When on, a
+**"Background jobs"** row opens a manager that lists every background job the
+session can see — unowned jobs plus each live session's own (the same
+visibility the GUI's shipped read-only job list uses) — with a **Terminate**
+button on live jobs, a per-row owner-session tag, and a **Terminate all
+running** action. Terminating a job stops it so the model stops waiting on it
+("just skip it").
+
+- The list is live: the manager polls `/dsh-qol/jobs` every 1.5s while open
+  and refreshes after every action.
+- **Authorization** — kill routes through the live owning Agent
+  (`ctx.agents.get(sessionId)` → `ctx.jobs.kill(id, agent, reason)`), exactly
+  the fence the shipped `job_kill` tool satisfies. A foreign session's job
+  fails with "belongs to another session" (400); an unknown job is 400.
+- When the toggle is off, the manager row and its polling are hidden.
+
+Host endpoints: `GET /dsh-qol/jobs` (list), `POST /dsh-qol/jobs`
+(body `{ id, sessionId?, reason? }` → terminate).
+
+### 3. MCP servers (manager)
 A server-management screen for the **global MCP servers** defined in
 `~/.dsh/cordis.patch.yml` (the `@deepseek-ai/dsh-mcp-client` rows), opened
 from the "MCP servers" row.
@@ -50,8 +68,9 @@ route `GET/PUT /dsh-qol/prefs` (same-origin; no secrets cross the browser).
 DSH-QoL/
   package.json     dsh.client declaration (platform: web) + exports["./client"]
   lib/index.js     host half — activates the loader entry AND serves
-                   GET/PUT /dsh-qol/prefs (persists ~/.dsh/qol-prefs.json)
-  lib/client.js    browser bundle — QoL settings section with the toggle
+                   GET/PUT /dsh-qol/prefs (persists ~/.dsh/qol-prefs.json),
+                   GET /dsh-qol/jobs + POST /dsh-qol/jobs (terminate)
+  lib/client.js    browser bundle — QoL settings section with the toggles
   tests/           smoke tests (node, no browser)
 ```
 

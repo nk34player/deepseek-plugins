@@ -38,18 +38,62 @@ const { pathToFileURL } = require("url");
 			}
 		}
 	};
+	// fake background-job registry honoring the session fence, plus live agents/sessions
+	const jobStore = new Map();
+	const killed = [];
+	const fakeJobs = {
+		list: (caller) => [...jobStore.values()]
+			.filter((job) => job.owner === void 0 || job.owner.id === caller?.id)
+			.map((job) => ({
+				id: job.id,
+				kind: job.kind,
+				label: job.label,
+				status: job.status,
+				startedAt: job.startedAt,
+				...(job.finishedAt !== void 0 ? { finishedAt: job.finishedAt } : {}),
+				...(job.owner !== void 0 ? { ownerSession: job.owner.id } : {}),
+				reported: false
+			})),
+		kill: (id, caller, reason) => {
+			const job = jobStore.get(id);
+			if (job === void 0) throw new Error(`unknown job ${id}`);
+			if (job.owner !== void 0 && job.owner.id !== caller?.id) throw new Error(`job ${id} belongs to another session`);
+			killed.push({ id, callerId: caller?.id, reason });
+			if (job.status !== "running" && job.status !== "stopping") return "already-finished";
+			job.status = "killed";
+			job.finishedAt = Date.now();
+			return "requested";
+		}
+	};
+	const agents = new Map();
+	const fakeAgents = { get: (id) => agents.get(id) };
+	const sessions = [
+		{ id: "sess-A", name: "alpha" },
+		{ id: "sess-B", name: "beta" }
+	];
+	// unowned job + one job owned by sess-A
+	jobStore.set("bash-1", { id: "bash-1", kind: "bash", label: "sleep 10", status: "running", startedAt: 1000 });
+	jobStore.set("bash-2", { id: "bash-2", kind: "bash", label: "echo hi", status: "running", owner: { id: "sess-A" }, startedAt: 2000 });
+	jobStore.set("bash-3", { id: "bash-3", kind: "bash", label: "done", status: "completed", owner: { id: "sess-A" }, startedAt: 3000, finishedAt: 4000 });
+	agents.set("sess-A", { id: "sess-A" });
+	agents.set("sess-B", { id: "sess-B" });
+
 	const routes = [];
 	const ctx = {
 		effect: (fn) => { const d = fn(); if (typeof d === "function") d(); },
 		webServer: { register: (r) => { routes.push(r); return () => {}; } },
 		loader: { entries: () => loaderEntries },
-		tools: fakeTools
+		tools: fakeTools,
+		jobs: fakeJobs,
+		agents: fakeAgents,
+		sessions: { list: () => sessions }
 	};
 	mod.apply(ctx);
-	if (routes.length !== 2) throw new Error("expected 2 routes, got " + routes.length);
+	if (routes.length !== 3) throw new Error("expected 3 routes, got " + routes.length);
 	const prefsRoute = routes.find((r) => r.kind === "exact" && r.path === "/dsh-qol/prefs");
 	const mcpRoute = routes.find((r) => r.kind === "prefix" && r.path === "/dsh-qol/mcp");
-	if (!prefsRoute || !mcpRoute) throw new Error("routes missing");
+	const jobsRoute = routes.find((r) => r.kind === "exact" && r.path === "/dsh-qol/jobs");
+	if (!prefsRoute || !mcpRoute || !jobsRoute) throw new Error("routes missing");
 
 	const call = (route, method, url, body) => {
 		let status = 0, payload = "";
@@ -111,9 +155,50 @@ const { pathToFileURL } = require("url");
 	if (r.status !== 400) throw new Error("unknown id should 400, got " + r.status);
 	console.log("unknown id -> 400 OK");
 
-	// --- prefs still fine ---
+	// --- jobs list merges unowned + session-owned, newest first ---
+	r = await call(jobsRoute, "GET", "/dsh-qol/jobs");
+	const jobRows = r.payload.jobs;
+	if (jobRows.length !== 3) throw new Error("expected 3 jobs, got " + jobRows.length);
+	const bash1 = jobRows.find((j) => j.id === "bash-1");
+	const bash2 = jobRows.find((j) => j.id === "bash-2");
+	if (bash1.ownerSession !== void 0) throw new Error("unowned job must not carry ownerSession");
+	if (bash2.ownerSession !== "sess-A") throw new Error("owned job must carry its session id");
+	if (!jobRows.some((j) => j.id === "bash-3" && j.status === "completed")) throw new Error("settled job missing");
+	console.log("jobs list OK:", jobRows.map((j) => `${j.id}:${j.status}(${j.ownerSession ?? "unowned"})`).join(", "));
+
+	// --- kill owned job routes through the live agent (fence satisfied) ---
+	r = await call(jobsRoute, "POST", "/dsh-qol/jobs", { id: "bash-2", sessionId: "sess-A", reason: "skip it" });
+	if (r.payload.result !== "requested") throw new Error("kill should be requested");
+	if (!killed.some((k) => k.id === "bash-2" && k.callerId === "sess-A" && k.reason === "skip it")) throw new Error("kill not routed through owner agent");
+	console.log("kill owned job OK");
+
+	// --- kill unowned job needs no session ---
+	r = await call(jobsRoute, "POST", "/dsh-qol/jobs", { id: "bash-1" });
+	if (r.payload.result !== "requested") throw new Error("unowned kill should be requested");
+	if (!killed.some((k) => k.id === "bash-1" && k.callerId === void 0)) throw new Error("unowned kill should have no caller");
+	console.log("kill unowned job OK");
+
+	// --- foreign session cannot kill another session's job -> 400 ---
+	r = await call(jobsRoute, "POST", "/dsh-qol/jobs", { id: "bash-3", sessionId: "sess-B" });
+	if (r.status !== 400) throw new Error("foreign kill should 400, got " + r.status);
+	if (!String(r.payload.error).includes("another session")) throw new Error("wrong foreign error: " + r.payload.error);
+	console.log("foreign kill -> 400 OK");
+
+	// --- unknown job id -> 400 ---
+	r = await call(jobsRoute, "POST", "/dsh-qol/jobs", { id: "nope" });
+	if (r.status !== 400) throw new Error("unknown job should 400, got " + r.status);
+	console.log("unknown job -> 400 OK");
+
+	// --- prefs round-trips the new toggle ---
 	r = await call(prefsRoute, "GET", "/dsh-qol/prefs");
-	if (!r.payload.ok || r.payload.prefs.sessionLogButton !== true) throw new Error("prefs broken after MCP ops");
+	if (!r.payload.ok || r.payload.prefs.sessionLogButton !== true || r.payload.prefs.controlBackgroundJobs !== true) {
+		throw new Error("prefs defaults wrong: " + JSON.stringify(r.payload.prefs));
+	}
+	r = await call(prefsRoute, "PUT", "/dsh-qol/prefs", { controlBackgroundJobs: false });
+	if (r.payload.prefs.controlBackgroundJobs !== false) throw new Error("controlBackgroundJobs not saved");
+	r = await call(prefsRoute, "PUT", "/dsh-qol/prefs", { controlBackgroundJobs: "yes" });
+	if (r.status !== 400) throw new Error("non-boolean controlBackgroundJobs should 400");
+	console.log("prefs controlBackgroundJobs OK");
 
 	fs.rmSync(stubHome, { recursive: true, force: true });
 	delete process.env.DSH_HOME;

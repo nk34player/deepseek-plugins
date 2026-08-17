@@ -24,8 +24,8 @@ import { homedir } from "node:os";
 
 /** Cordis plugin name. */
 const name = "dsh-qol";
-/** Required services: the web route registry, the Loader (runtime state), and the tool registry. */
-const inject = ["webServer", "loader", "tools"];
+/** Required services: routes, Loader (runtime state), tool registry, background jobs, live agents, sessions. */
+const inject = ["webServer", "loader", "tools", "jobs", "agents", "sessions"];
 
 /** Resolve the harness home (env override, else ~/.dsh). */
 function dshHome() {
@@ -35,7 +35,7 @@ function dshHome() {
 //#region preferences
 /** Defaults applied when the prefs file is absent or malformed. */
 function defaultPrefs() {
-	return { sessionLogButton: true };
+	return { sessionLogButton: true, controlBackgroundJobs: true };
 }
 
 /** Read the prefs file, merging defaults. */
@@ -45,7 +45,8 @@ function readPrefs() {
 		const raw = JSON.parse(readFileSync(path, "utf8"));
 		const d = defaultPrefs();
 		return {
-			sessionLogButton: typeof raw.sessionLogButton === "boolean" ? raw.sessionLogButton : d.sessionLogButton
+			sessionLogButton: typeof raw.sessionLogButton === "boolean" ? raw.sessionLogButton : d.sessionLogButton,
+			controlBackgroundJobs: typeof raw.controlBackgroundJobs === "boolean" ? raw.controlBackgroundJobs : d.controlBackgroundJobs
 		};
 	} catch {
 		return defaultPrefs();
@@ -56,6 +57,7 @@ function readPrefs() {
 function writePrefs(patch) {
 	const merged = { ...readPrefs(), ...patch };
 	if (typeof merged.sessionLogButton !== "boolean") throw new Error("sessionLogButton must be a boolean");
+	if (typeof merged.controlBackgroundJobs !== "boolean") throw new Error("controlBackgroundJobs must be a boolean");
 	writeFileSync(join(dshHome(), "qol-prefs.json"), JSON.stringify(merged, null, 2) + "\n", "utf8");
 	return merged;
 }
@@ -309,6 +311,92 @@ function removeMcpRow(id) {
 }
 //#endregion
 
+//#region Background-jobs manager
+/**
+ * One background job as the QoL client sees it: the public snapshot plus the
+ * owning session when the job is session-owned. `reported` and output limits
+ * are internal bookkeeping with no human meaning and are dropped.
+ */
+function jobView(snapshot) {
+	return {
+		id: snapshot.id,
+		kind: snapshot.kind,
+		label: snapshot.label,
+		status: snapshot.status,
+		...snapshot.detail !== void 0 ? { detail: snapshot.detail } : {},
+		startedAt: snapshot.startedAt,
+		...snapshot.finishedAt !== void 0 ? { finishedAt: snapshot.finishedAt } : {},
+		...snapshot.ownerSession !== void 0 ? { ownerSession: snapshot.ownerSession } : {}
+	};
+}
+
+/**
+ * List every background job the QoL surface may show: unowned jobs (open to
+ * any caller) plus the jobs owned by each live session, resolved through the
+ * exact live Agent so the registry's session fence is honored. Deduped by id,
+ * preferring the row that carries an ownerSession. Defensive per session —
+ * a teardown race never fails the whole list.
+ * @param ctx - host plugin context (jobs, agents, sessions services).
+ * @returns public job views, newest first.
+ */
+function listJobs(ctx) {
+	const jobs = ctx.jobs;
+	if (jobs === void 0 || jobs === null) throw new Error("background job registry unavailable");
+	const byId = new Map();
+	const absorb = (snapshot, sessionId) => {
+		// Ownership is read from the snapshot's own marker (the registry's
+		// snapshot() emits ownerSession for owned jobs); the passed sessionId is
+		// only a fallback when the registry omits it. Unowned jobs re-listed by an
+		// owned caller therefore never pick up that caller's session id.
+		const row = jobView(snapshot);
+		const prior = byId.get(row.id);
+		if (prior === void 0 || (prior.ownerSession === void 0 && row.ownerSession !== void 0)) {
+			byId.set(row.id, row.ownerSession !== void 0 ? row : (sessionId !== void 0 ? { ...row, ownerSession: sessionId } : row));
+		}
+	};
+	try {
+		for (const snapshot of jobs.list(void 0)) absorb(snapshot);
+	} catch {
+		/* unowned read failed; owned reads below still contribute */
+	}
+	if (ctx.sessions !== void 0 && typeof ctx.sessions.list === "function") {
+		for (const session of ctx.sessions.list()) {
+			let agent;
+			try {
+				agent = ctx.agents?.get(session.id);
+			} catch {
+				agent = void 0;
+			}
+			if (agent === void 0 || agent === null) continue;
+			try {
+				for (const snapshot of jobs.list(agent)) absorb(snapshot, session.id);
+			} catch {
+				/* a torn-down session's read can fail; skip it */
+			}
+		}
+	}
+	return [...byId.values()].sort((a, b) => b.startedAt - a.startedAt);
+}
+
+/**
+ * Terminate one background job by id, scoped to its owning session. The caller
+ * is resolved to the live Agent of that session (never fabricated), matching
+ * the registry's authorization model exactly.
+ * @param ctx - host plugin context.
+ * @param id - registry job id.
+ * @param sessionId - owning session id (may be absent for unowned jobs).
+ * @param reason - forwarded to the producer.
+ * @returns `requested` for live work, `already-finished` for a settled job.
+ */
+function killJob(ctx, id, sessionId, reason) {
+	const jobs = ctx.jobs;
+	if (jobs === void 0 || jobs === null) throw new Error("background job registry unavailable");
+	if (typeof id !== "string" || id.length === 0) throw new Error("job id is required");
+	const caller = sessionId !== void 0 ? ctx.agents?.get(sessionId) : void 0;
+	return jobs.kill(id, caller, reason);
+}
+//#endregion
+
 /** Read the JSON request body (bounded). */
 function readBody(req) {
 	return new Promise((resolve, reject) => {
@@ -406,7 +494,37 @@ function apply(ctx) {
 			}
 		});
 
-		return () => { disposePrefs(); disposeMcp(); };
+		const disposeJobs = ctx.webServer.register({
+			kind: "exact",
+			path: "/dsh-qol/jobs",
+			handler: async (req, res) => {
+				const json = (value, status = 200) => {
+					res.writeHead(status, {
+						"content-type": "application/json; charset=utf-8",
+						"cache-control": "no-cache"
+					});
+					res.end(JSON.stringify(value));
+				};
+				try {
+					if (req.method === "GET" || req.method === "HEAD") {
+						json({ ok: true, jobs: listJobs(ctx) });
+						return;
+					}
+					if (req.method === "POST") {
+						const body = await readBody(req);
+						const result = killJob(ctx, body.id, body.sessionId, body.reason ?? "terminated from QoL");
+						json({ ok: true, result, jobs: listJobs(ctx) });
+						return;
+					}
+					res.writeHead(405);
+					res.end();
+				} catch (error) {
+					json({ ok: false, error: error instanceof Error ? error.message : String(error) }, 400);
+				}
+			}
+		});
+
+		return () => { disposePrefs(); disposeMcp(); disposeJobs(); };
 	}, "dsh-qol: routes");
 }
 //#endregion

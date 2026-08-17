@@ -34,10 +34,25 @@ if (captured.id !== "@deepseek-ai/dsh-qol") throw new Error("bad id: " + capture
 // --- stub fetch BEFORE apply: applyPrefsOnLaunch() runs inside apply() ---
 // The launch apply retries when the fetch fails (host route still booting);
 // here the route is always up so the first attempt must succeed.
-const PREF_GET = { sessionLogButton: false };
+const PREF_GET = { sessionLogButton: false, controlBackgroundJobs: true };
+const MCP_SERVERS = [
+	{ id: "mcp-context7", serverName: "context7", transport: "stdio", command: "node server.js --key ********", commandPreview: "node server.js --key ********", envKeys: ["CONTEXT7_API_KEY"], enabled: true, status: "available · running", tone: "available" },
+	{ id: "mcp-tavily", serverName: "tavily", transport: "stdio", command: "node proxy.js", commandPreview: "node proxy.js", envKeys: [], enabled: false, status: "disabled", tone: "disabled" }
+];
+const JOBS = [
+	{ id: "bash-1", kind: "bash", label: "sleep 10", status: "running", startedAt: 1000 },
+	{ id: "bash-2", kind: "bash", label: "echo hi", status: "completed", ownerSession: "sess-A", startedAt: 2000, finishedAt: 3000 }
+];
+const killedIds = [];
 global.fetch = async (url, init) => {
 	const u = String(url);
 	const method = init && typeof init.method === "string" ? init.method : "GET";
+	if (u.includes("/dsh-qol/jobs")) {
+		if (method === "POST") {
+			killedIds.push(JSON.parse(init.body).id);
+		}
+		return { ok: true, json: async () => ({ ok: true, jobs: JOBS }) };
+	}
 	if (u.includes("/dsh-qol/mcp")) {
 		return { ok: true, json: async () => ({ ok: true, servers: MCP_SERVERS }) };
 	}
@@ -46,12 +61,11 @@ global.fetch = async (url, init) => {
 		return { ok: true, json: async () => ({ ok: true, prefs: PREF_GET }) };
 	}
 	const body = JSON.parse(init.body);
-	return { ok: true, json: async () => ({ ok: true, prefs: { sessionLogButton: body.sessionLogButton ?? true } }) };
+	return { ok: true, json: async () => ({
+		ok: true,
+		prefs: { sessionLogButton: body.sessionLogButton ?? true, controlBackgroundJobs: body.controlBackgroundJobs ?? true }
+	}) };
 };
-const MCP_SERVERS = [
-	{ id: "mcp-context7", serverName: "context7", transport: "stdio", command: "node server.js --key ********", commandPreview: "node server.js --key ********", envKeys: ["CONTEXT7_API_KEY"], enabled: true, status: "available · running", tone: "available" },
-	{ id: "mcp-tavily", serverName: "tavily", transport: "stdio", command: "node proxy.js", commandPreview: "node proxy.js", envKeys: [], enabled: false, status: "disabled", tone: "disabled" }
-];
 
 const mod = captured.factory((spec) => {
 	if (spec === "react") return reactStub;
@@ -91,13 +105,15 @@ setTimeout(() => {
 	const settled = reg.comp({ close: () => {} });
 	const json = JSON.stringify(settled);
 	if (!json.includes("Session log button")) throw new Error("missing session-log row");
+	if (!json.includes("Control Background Jobs")) throw new Error("missing control-background-jobs row");
+	if (!json.includes("Background jobs")) throw new Error("missing background-jobs manager row");
 	if (!json.includes("QoL")) throw new Error("missing page title");
 	if (json.includes("When closing window") || json.includes("Keep Running") || json.includes("Quit")) {
 		throw new Error("close-behavior control should be removed");
 	}
-	console.log("section renders switch only (no close-behavior control) OK");
+	console.log("section renders session-log + control-background-jobs switches + manager row OK");
 
-	// exactly one Switch (session log), no SegmentedControl
+	// exactly two Switches (session log + control background jobs), no SegmentedControl
 	const switches = [];
 	const walk = (node) => {
 		if (!node || typeof node !== "object") return;
@@ -108,8 +124,8 @@ setTimeout(() => {
 		if (Array.isArray(node.children)) node.children.forEach(walk);
 	};
 	walk(settled);
-	if (switches.length !== 1) throw new Error("expected 1 switch, got " + switches.length);
-	console.log("structure OK: 1 switch");
+	if (switches.length !== 2) throw new Error("expected 2 switches, got " + switches.length);
+	console.log("structure OK: 2 switches");
 
 	// --- MCP manager: open the list view ---
 	reactStub.__beginRender();
@@ -134,7 +150,35 @@ setTimeout(() => {
 		if (mcpViewEl.props.servers[0].serverName !== "context7") throw new Error("context7 missing");
 		if (mcpViewEl.props.servers[1].status !== "disabled") throw new Error("tavily status wrong");
 		console.log("MCP list view OK: servers =", mcpViewEl.props.servers.map((s) => s.serverName).join(", "));
-		console.log("SMOKE TEST PASSED");
+
+		// --- Background-jobs manager: back to prefs, open the jobs view ---
+		mcpViewEl.props.onBack();
+		reactStub.__beginRender();
+		const prefsAgain = reg.comp({ close: () => {} });
+		const walk3 = (node, out) => {
+			if (!node || typeof node !== "object") return;
+			if (node.props && typeof node.props.onClick === "function") out.push(node);
+			if (Array.isArray(node.children)) node.children.forEach((c) => walk3(c, out));
+		};
+		const clickables3 = [];
+		walk3(prefsAgain, clickables3);
+		const jobsNav = clickables3.find((n) => JSON.stringify(n).includes("Background jobs") && !JSON.stringify(n).includes("Control Background Jobs"));
+		if (!jobsNav) throw new Error("Background jobs row not found");
+		jobsNav.props.onClick();
+		setTimeout(() => {
+			reactStub.__beginRender();
+			const jobsTree = reg.comp({ close: () => {} });
+			const jobsViewEl = findElement(jobsTree, (n) => n.props && Array.isArray(n.props.jobs) && n.props.jobs.length === 2);
+			if (!jobsViewEl) throw new Error("JobListView not rendered with jobs");
+			if (jobsViewEl.props.jobs[0].id !== "bash-1" || jobsViewEl.props.jobs[1].status !== "completed") throw new Error("jobs data wrong");
+			// terminate a live job -> POST /dsh-qol/jobs with the job id
+			jobsViewEl.props.onTerminate({ id: "bash-1", ownerSession: undefined });
+			setTimeout(() => {
+				if (!killedIds.includes("bash-1")) throw new Error("terminate did not POST");
+				console.log("jobs view OK: list + terminate routed");
+				console.log("SMOKE TEST PASSED");
+			}, 20);
+		}, 20);
 	}, 50);
 
 	function findElement(node, pred) {
