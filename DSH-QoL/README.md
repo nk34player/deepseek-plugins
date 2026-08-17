@@ -11,20 +11,13 @@ Show/hide the **"Session log"** download button in the session header
 `conversation.session.header.utilities` outlet (where the shipped
 `session-log-download` entry renders).
 
-### 2. When closing window (segmented control)
-A Reasonix-style segmented choice, not an on/off toggle:
+The preference is persisted to **`~/.dsh/qol-prefs.json`** and applied
+**at launch** — the client re-reads the pref when the app boots (retrying
+until the host route responds) and whenever the settings page opens. The
+desktop shell always hides to tray on window close; there is no quit/close
+behavior option.
 
-```
-[ Keep Running ] [ Quit ]
-```
-
-- **Keep Running** (default) — closing the window hides the app to the system
-  tray; the backend keeps running. This is the installed desktop shell's
-  current behavior (verified in its `app.asar`).
-- **Quit** — closing the window quits the app completely. Needs the small
-  shell patch below, because the packaged shell currently always hides.
-
-### 3. MCP servers (manager)
+### 2. MCP servers (manager)
 A server-management screen for the **global MCP servers** defined in
 `~/.dsh/cordis.patch.yml` (the `@deepseek-ai/dsh-mcp-client` rows), opened
 from the "MCP servers" row.
@@ -50,56 +43,6 @@ Host endpoints: `GET /dsh-qol/mcp`, `PUT /dsh-qol/mcp/<id>` (enabled),
 
 The preference is persisted to **`~/.dsh/qol-prefs.json`** through the host
 route `GET/PUT /dsh-qol/prefs` (same-origin; no secrets cross the browser).
-The desktop shell reads that file to decide its window-close behavior; the
-client also calls `window.dshDesktop.setCloseBehavior(...)` directly when the
-shell exposes that bridge.
-
-## Desktop-shell hook (required for toggle 2 to take effect)
-
-The harness web GUI runs inside the desktop shell
-([salathleizhang/deepseek-harness-desktop](https://github.com/salathleizhang/deepseek-harness-desktop)),
-which owns the Electron `BrowserWindow`. **The installed shell already has a
-tray and already hides-to-tray on close** (verified in the packaged
-`app.asar`: `lib/window-lifecycle.js` always `preventDefault()` + `hide()`
-on window close, and `lib/main.js` builds a tray menu with Open Window /
-Launch at login / Notifications / Quit). The GitHub README is stale.
-
-So "Keep Running" (tray) is the shell's current behavior — the gap is the
-**Quit** option. To make the segmented control actually quit, patch the
-shell's `lib/window-lifecycle.js` to read the pref file:
-
-```js
-// desktop-shell lib/window-lifecycle.js (createDesktopLifecycle)
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { homedir } from "node:os";
-
-function readCloseBehavior() {
-  try {
-    const raw = JSON.parse(readFileSync(join(homedir(), ".dsh", "qol-prefs.json"), "utf8"));
-    return raw.closeBehavior === "quit" ? "quit" : "tray";
-  } catch {
-    return "tray"; // shell default: hide to tray
-  }
-}
-
-onWindowClose(event) {
-  if (quitting) return;
-  if (readCloseBehavior() === "quit") {
-    requestQuit();        // tear down the Host and app.quit()
-    return;
-  }
-  event.preventDefault();
-  options.getWindow()?.hide();
-}
-```
-
-`requestQuit` is already wired in the shell (used by the tray's Quit item and
-updater install), so the close path just reuses it.
-
-The plugin's client also calls `window.dshDesktop.setCloseBehavior(...)` when
-the shell's preload exposes such a method — the packaged preload currently
-does not, so the file read above is the authoritative channel.
 
 ## Layout
 
@@ -108,7 +51,7 @@ DSH-QoL/
   package.json     dsh.client declaration (platform: web) + exports["./client"]
   lib/index.js     host half — activates the loader entry AND serves
                    GET/PUT /dsh-qol/prefs (persists ~/.dsh/qol-prefs.json)
-  lib/client.js    browser bundle — QoL settings section with the two toggles
+  lib/client.js    browser bundle — QoL settings section with the toggle
   tests/           smoke tests (node, no browser)
 ```
 

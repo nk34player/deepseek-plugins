@@ -113,7 +113,7 @@ const { pathToFileURL } = require("url");
 
 	// --- prefs still fine ---
 	r = await call(prefsRoute, "GET", "/dsh-qol/prefs");
-	if (!r.payload.ok || r.payload.prefs.closeBehavior !== "quit") throw new Error("prefs broken after MCP ops");
+	if (!r.payload.ok || r.payload.prefs.sessionLogButton !== true) throw new Error("prefs broken after MCP ops");
 
 	fs.rmSync(stubHome, { recursive: true, force: true });
 	delete process.env.DSH_HOME;

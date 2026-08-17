@@ -3,10 +3,8 @@
 //   • Session log button — show/hide the top-right "Session log" download
 //     button (the shipped session-log-export entry in the
 //     conversation.session.header.utilities slot; hidden via an injected
-//     stylesheet when off).
-//   • When closing window — Reasonix-style segmented control: Keep Running
-//     (tray) vs Quit. Persisted host-side to ~/.dsh/qol-prefs.json; the
-//     desktop shell reads it for its window-close behavior.
+//     stylesheet when off). Persisted host-side to ~/.dsh/qol-prefs.json;
+//     applied at launch (with retry) and whenever the settings page opens.
 //   • MCP servers — a manager: list of the global MCP servers from
 //     ~/.dsh/cordis.patch.yml merged with live loader state, with an
 //     enable/disable toggle and a remove action, plus a detail screen
@@ -82,52 +80,6 @@ window.__ModuleLoader__.load({
 				}
 			}));
 		}
-		/** A DSH-style segmented control (two labeled actions). */
-		function SegmentedControl({ value, options, onChange, label, disabled }) {
-			return react.createElement("div", {
-				role: "radiogroup",
-				"aria-label": label,
-				style: {
-					boxSizing: "border-box",
-					display: "inline-flex",
-					flex: "none",
-					border: "1px solid var(--dsw-alias-border-l2)",
-					borderRadius: "999px",
-					padding: "2px",
-					background: "var(--dsw-alias-interactive-bg-hover)"
-				}
-			}, options.map((opt, index) => react.createElement("button", {
-				key: opt.id,
-				type: "button",
-				role: "radio",
-				"aria-checked": value === opt.id,
-				disabled: disabled === true,
-				onClick: () => onChange(opt.id),
-				style: {
-					boxSizing: "border-box",
-					height: "28px",
-					font: "inherit",
-					fontSize: "13px",
-					lineHeight: "28px",
-					cursor: disabled === true ? "default" : "pointer",
-					border: "none",
-					borderRadius: "999px",
-					padding: "0 14px",
-					display: "inline-flex",
-					alignItems: "center",
-					...(index > 0 && value !== opt.id
-						? { borderLeft: "1px solid var(--dsw-alias-border-l2)", borderRadius: 0 }
-						: {}),
-					background: value === opt.id
-						? "var(--dsw-alias-button-primary-fill)"
-						: "transparent",
-					color: value === opt.id
-						? "var(--dsw-alias-label-primary-foreground)"
-						: "var(--dsw-alias-label-secondary)",
-					transition: "background 150ms ease"
-				}
-			}, opt.label)));
-		}
 		//#endregion
 
 		//#region prefs helpers
@@ -161,15 +113,6 @@ window.__ModuleLoader__.load({
 			style.textContent = `[data-slot="conversation.session.header.utilities"] { display: none !important; }`;
 			document.head.appendChild(style);
 			sessionLogStyle = style;
-		}
-		/** Tell the desktop shell about the close behavior when a bridge exists. */
-		function notifyDesktopCloseBehavior(behavior) {
-			if (typeof window === "undefined" || window === null) return;
-			const bridge = window.dshDesktop;
-			if (bridge === null || bridge === void 0) return;
-			if (typeof bridge.setCloseBehavior === "function") {
-				try { bridge.setCloseBehavior(behavior); } catch (_) { /* pref file is authoritative */ }
-			}
 		}
 		//#endregion
 
@@ -492,9 +435,6 @@ window.__ModuleLoader__.load({
 						if (Object.prototype.hasOwnProperty.call(patch, "sessionLogButton")) {
 							applySessionLogButton(next.sessionLogButton !== false);
 						}
-						if (Object.prototype.hasOwnProperty.call(patch, "closeBehavior")) {
-							notifyDesktopCloseBehavior(next.closeBehavior);
-						}
 					})
 					.catch((err) => setError(err instanceof Error ? err.message : String(err)));
 			};
@@ -578,26 +518,6 @@ window.__ModuleLoader__.load({
 						onChange: (value) => update({ sessionLogButton: value })
 					})
 				),
-				react.createElement("div", { style: ROW },
-					react.createElement("div", {
-						"aria-hidden": "true",
-						style: { flex: "none", color: "var(--dsw-alias-label-tertiary)", fontSize: "16px", lineHeight: "1" }
-					}, "⏻"),
-					textBlock(
-						"When closing window",
-						"Choose whether DeepSeek Harness keeps running after its main window closes. The desktop shell reads ~/.dsh/qol-prefs.json."
-					),
-					react.createElement(SegmentedControl, {
-						value: prefs === null ? "quit" : prefs.closeBehavior,
-						disabled: prefs === null,
-						label: "When closing window",
-						options: [
-							{ id: "tray", label: "Keep Running" },
-							{ id: "quit", label: "Quit" }
-						],
-						onChange: (value) => update({ closeBehavior: value })
-					})
-				),
 				react.createElement("div", {
 					style: { ...ROW, cursor: "pointer" },
 					role: "button",
@@ -621,17 +541,28 @@ window.__ModuleLoader__.load({
 		const name = "dsh-qol";
 		/**
 		 * Apply prefs at launch (independent of the settings page). The only
-		 * launch-visible pref today is the session-log-button visibility,
-		 * injected as a stylesheet as soon as prefs are read.
+		 * launch-visible pref is the session-log-button visibility, injected as
+		 * a stylesheet as soon as prefs are read. Retries until the host route
+		 * responds (the host half may still be booting when the client bundle
+		 * applies); on total failure the settings page re-applies on open.
 		 */
+		const LAUNCH_PREF_RETRIES = 10;
+		const LAUNCH_PREF_RETRY_MS = 400;
 		function applyPrefsOnLaunch() {
 			if (typeof window === "undefined" || window === null) return;
-			fetchPrefs()
-				.then((prefs) => {
-					if (prefs === null) return;
-					applySessionLogButton(prefs.sessionLogButton !== false);
-				})
-				.catch(() => { /* prefs apply lazily when the settings page opens */ });
+			let attempts = 0;
+			const tryApply = () => {
+				attempts += 1;
+				fetchPrefs()
+					.then((prefs) => {
+						if (prefs === null) return;
+						applySessionLogButton(prefs.sessionLogButton !== false);
+					})
+					.catch(() => {
+						if (attempts < LAUNCH_PREF_RETRIES) setTimeout(tryApply, LAUNCH_PREF_RETRY_MS);
+					});
+			};
+			tryApply();
 		}
 		/** Register the QoL settings page (a new nav section, order 30). */
 		function apply(ctx) {

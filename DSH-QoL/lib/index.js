@@ -5,8 +5,7 @@
  * Jobs:
  *  1. Activate in the host Loader so client-modules discovers the browser half.
  *  2. Serve GET/PUT /dsh-qol/prefs — persist QoL preferences to
- *     ~/.dsh/qol-prefs.json (also the hook the desktop shell reads for
- *     close behavior).
+ *     ~/.dsh/qol-prefs.json.
  *  3. Serve the MCP manager surface:
  *     - GET  /dsh-qol/mcp        → list of MCP servers: config parsed from
  *       ~/.dsh/cordis.patch.yml (@deepseek-ai/dsh-mcp-client rows) merged
@@ -36,7 +35,7 @@ function dshHome() {
 //#region preferences
 /** Defaults applied when the prefs file is absent or malformed. */
 function defaultPrefs() {
-	return { sessionLogButton: true, closeBehavior: "quit" };
+	return { sessionLogButton: true };
 }
 
 /** Read the prefs file, merging defaults. */
@@ -46,8 +45,7 @@ function readPrefs() {
 		const raw = JSON.parse(readFileSync(path, "utf8"));
 		const d = defaultPrefs();
 		return {
-			sessionLogButton: typeof raw.sessionLogButton === "boolean" ? raw.sessionLogButton : d.sessionLogButton,
-			closeBehavior: raw.closeBehavior === "tray" || raw.closeBehavior === "quit" ? raw.closeBehavior : d.closeBehavior
+			sessionLogButton: typeof raw.sessionLogButton === "boolean" ? raw.sessionLogButton : d.sessionLogButton
 		};
 	} catch {
 		return defaultPrefs();
@@ -58,7 +56,6 @@ function readPrefs() {
 function writePrefs(patch) {
 	const merged = { ...readPrefs(), ...patch };
 	if (typeof merged.sessionLogButton !== "boolean") throw new Error("sessionLogButton must be a boolean");
-	if (merged.closeBehavior !== "tray" && merged.closeBehavior !== "quit") throw new Error("closeBehavior must be 'tray' or 'quit'");
 	writeFileSync(join(dshHome(), "qol-prefs.json"), JSON.stringify(merged, null, 2) + "\n", "utf8");
 	return merged;
 }

@@ -19,10 +19,8 @@ const reactStub = {
 // --- stub window + document (for the stylesheet injection) ---
 const headChildren = [];
 global.window = {
-	__ModuleLoader__: { load: (o) => { captured = o; } },
-	dshDesktop: { setCloseBehavior: (b) => { window._bridgeCalls.push(b); } }
+	__ModuleLoader__: { load: (o) => { captured = o; } }
 };
-global.window._bridgeCalls = [];
 global.document = {
 	createElement: (tag) => ({ tag, textContent: "", dataset: {}, remove() { this._removed = true; } }),
 	head: { appendChild: (el) => headChildren.push(el) }
@@ -32,6 +30,28 @@ let captured = null;
 require(path.join(__dirname, "..", "lib", "client.js"));
 if (!captured) throw new Error("bundle did not call __ModuleLoader__.load");
 if (captured.id !== "@deepseek-ai/dsh-qol") throw new Error("bad id: " + captured.id);
+
+// --- stub fetch BEFORE apply: applyPrefsOnLaunch() runs inside apply() ---
+// The launch apply retries when the fetch fails (host route still booting);
+// here the route is always up so the first attempt must succeed.
+const PREF_GET = { sessionLogButton: false };
+global.fetch = async (url, init) => {
+	const u = String(url);
+	const method = init && typeof init.method === "string" ? init.method : "GET";
+	if (u.includes("/dsh-qol/mcp")) {
+		return { ok: true, json: async () => ({ ok: true, servers: MCP_SERVERS }) };
+	}
+	// /dsh-qol/prefs
+	if (method === "GET") {
+		return { ok: true, json: async () => ({ ok: true, prefs: PREF_GET }) };
+	}
+	const body = JSON.parse(init.body);
+	return { ok: true, json: async () => ({ ok: true, prefs: { sessionLogButton: body.sessionLogButton ?? true } }) };
+};
+const MCP_SERVERS = [
+	{ id: "mcp-context7", serverName: "context7", transport: "stdio", command: "node server.js --key ********", commandPreview: "node server.js --key ********", envKeys: ["CONTEXT7_API_KEY"], enabled: true, status: "available · running", tone: "available" },
+	{ id: "mcp-tavily", serverName: "tavily", transport: "stdio", command: "node proxy.js", commandPreview: "node proxy.js", envKeys: [], enabled: false, status: "disabled", tone: "disabled" }
+];
 
 const mod = captured.factory((spec) => {
 	if (spec === "react") return reactStub;
@@ -52,93 +72,69 @@ const reg = registrations[0];
 if (reg.opts.id !== "qol" || reg.opts.order !== 30 || reg.opts.label !== "QoL") throw new Error("bad registration opts");
 console.log("registration OK: settings.section id=qol order=30");
 
-// --- render the section with stubbed fetch + hooks ---
-global.fetch = async (url, init) => {
-	const u = String(url);
-	if (u.includes("/dsh-qol/mcp")) {
-		if (init && (init.method === "PUT" || init.method === "DELETE")) {
-			return { ok: true, json: async () => ({ ok: true, servers: MCP_SERVERS }) };
-		}
-		return { ok: true, json: async () => ({ ok: true, servers: MCP_SERVERS }) };
-	}
-	if (init === undefined) {
-		return { ok: true, json: async () => ({ ok: true, prefs: { sessionLogButton: true, closeBehavior: "quit" } }) };
-	}
-	const body = JSON.parse(init.body);
-	return { ok: true, json: async () => ({ ok: true, prefs: { sessionLogButton: body.sessionLogButton ?? true, closeBehavior: body.closeBehavior ?? "quit" } }) };
-};
-const MCP_SERVERS = [
-	{ id: "mcp-context7", serverName: "context7", transport: "stdio", command: "node server.js --key ********", commandPreview: "node server.js --key ********", envKeys: ["CONTEXT7_API_KEY"], enabled: true, status: "available · running", tone: "available" },
-	{ id: "mcp-tavily", serverName: "tavily", transport: "stdio", command: "node proxy.js", commandPreview: "node proxy.js", envKeys: [], enabled: false, status: "disabled", tone: "disabled" }
-];
+// applyPrefsOnLaunch: the launch fetch resolves (pref says sessionLogButton=false),
+// so a stylesheet hiding the session-log button is injected once microtasks run
+// (asserted inside the setTimeout below).
 
 reactStub.__reset();
 const tree = reg.comp({ close: () => {} });
 hookStore.effects.forEach((fn) => fn());
 
 setTimeout(() => {
+	if (headChildren.filter((el) => el._removed !== true).length !== 1) throw new Error("launch stylesheet not injected");
+	const liveStyle = headChildren.find((el) => el._removed !== true);
+	if (!liveStyle || liveStyle.tag !== "style") throw new Error("launch stylesheet not injected");
+	if (!liveStyle.textContent.includes("conversation.session.header.utilities")) throw new Error("launch stylesheet targets wrong slot");
+	console.log("launch apply OK: session-log button hidden via injected stylesheet");
+
 	reactStub.__beginRender();
 	const settled = reg.comp({ close: () => {} });
 	const json = JSON.stringify(settled);
 	if (!json.includes("Session log button")) throw new Error("missing session-log row");
-	if (!json.includes("When closing window")) throw new Error("missing close-behavior row");
-	if (!json.includes("Keep Running") || !json.includes("Quit")) throw new Error("missing segmented options");
-	if (!json.includes("⏻")) throw new Error("missing power icon");
 	if (!json.includes("QoL")) throw new Error("missing page title");
-	console.log("section renders switch + segmented control OK");
+	if (json.includes("When closing window") || json.includes("Keep Running") || json.includes("Quit")) {
+		throw new Error("close-behavior control should be removed");
+	}
+	console.log("section renders switch only (no close-behavior control) OK");
 
-	// exactly one Switch (session log) and one SegmentedControl component
+	// exactly one Switch (session log), no SegmentedControl
 	const switches = [];
-	let segmented = null;
 	const walk = (node) => {
 		if (!node || typeof node !== "object") return;
 		if (node.props) {
 			if (typeof node.props.onChange === "function" && "checked" in node.props) switches.push(node);
-			if (Array.isArray(node.props.options) && typeof node.props.onChange === "function") segmented = node;
+			if (Array.isArray(node.props.options) && typeof node.props.onChange === "function") throw new Error("SegmentedControl should be removed");
 		}
 		if (Array.isArray(node.children)) node.children.forEach(walk);
 	};
 	walk(settled);
 	if (switches.length !== 1) throw new Error("expected 1 switch, got " + switches.length);
-	if (!segmented) throw new Error("SegmentedControl not found");
-	if (segmented.props.options.length !== 2) throw new Error("expected 2 segmented options");
-	console.log("structure OK: 1 switch + segmented control with 2 options");
+	console.log("structure OK: 1 switch");
 
-	// select "Quit" in the segmented control -> PUT closeBehavior:"quit" + bridge call
-	segmented.props.onChange("quit");
+	// --- MCP manager: open the list view ---
+	reactStub.__beginRender();
+	const listTree = reg.comp({ close: () => {} });
+	const walk2 = (node, out) => {
+		if (!node || typeof node !== "object") return;
+		if (node.props && typeof node.props.onClick === "function") out.push(node);
+		if (Array.isArray(node.children)) node.children.forEach((c) => walk2(c, out));
+	};
+	const clickables = [];
+	walk2(listTree, clickables);
+	// the MCP servers row is the div with onClick that switches view
+	const mcpNav = clickables.find((n) => JSON.stringify(n).includes("MCP servers"));
+	if (!mcpNav) throw new Error("MCP servers row not found");
+	mcpNav.props.onClick();
 	setTimeout(() => {
-		if (window._bridgeCalls.length !== 1 || window._bridgeCalls[0] !== "quit") {
-			throw new Error("desktop bridge not called with 'quit': " + JSON.stringify(window._bridgeCalls));
-		}
-		console.log("segmented Quit -> desktop bridge called with 'quit'");
-
-		// --- MCP manager: open the list view ---
 		reactStub.__beginRender();
-		const listTree = reg.comp({ close: () => {} });
-		const mcpRow = findElement(listTree, (n) => n.props && String(n.props.children ?? "").includes("MCP servers") === false && n.props.onClick && JSON.stringify(n).includes("MCP servers"));
-		// simpler: find the row whose children contain the "MCP servers" text
-		const walk2 = (node, out) => {
-			if (!node || typeof node !== "object") return;
-			if (node.props && typeof node.props.onClick === "function") out.push(node);
-			if (Array.isArray(node.children)) node.children.forEach((c) => walk2(c, out));
-		};
-		const clickables = [];
-		walk2(listTree, clickables);
-		// the MCP servers row is the div with onClick that switches view
-		const mcpNav = clickables.find((n) => JSON.stringify(n).includes("MCP servers"));
-		if (!mcpNav) throw new Error("MCP servers row not found");
-		mcpNav.props.onClick();
-		setTimeout(() => {
-			reactStub.__beginRender();
-			const mcpList = reg.comp({ close: () => {} });
-			// McpListView is a component element; find it by its props shape
-			const mcpViewEl = findElement(mcpList, (n) => n.props && Array.isArray(n.props.servers) && n.props.servers.length === 2);
-			if (!mcpViewEl) throw new Error("McpListView not rendered with servers");
-			if (mcpViewEl.props.servers[0].serverName !== "context7") throw new Error("context7 missing");
-			if (mcpViewEl.props.servers[1].status !== "disabled") throw new Error("tavily status wrong");
-			console.log("MCP list view OK: servers =", mcpViewEl.props.servers.map((s) => s.serverName).join(", "));
-			console.log("SMOKE TEST PASSED");
-		}, 50);
+		const mcpList = reg.comp({ close: () => {} });
+		// McpListView is a component element; find it by its props shape
+		const mcpViewEl = findElement(mcpList, (n) => n.props && Array.isArray(n.props.servers) && n.props.servers.length === 2);
+		if (!mcpViewEl) throw new Error("McpListView not rendered with servers");
+		if (mcpViewEl.props.servers[0].serverName !== "context7") throw new Error("context7 missing");
+		if (mcpViewEl.props.servers[1].status !== "disabled") throw new Error("tavily status wrong");
+		console.log("MCP list view OK: servers =", mcpViewEl.props.servers.map((s) => s.serverName).join(", "));
+		console.log("SMOKE TEST PASSED");
 	}, 50);
 
 	function findElement(node, pred) {
