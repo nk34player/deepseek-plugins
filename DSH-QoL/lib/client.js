@@ -809,7 +809,7 @@ window.__ModuleLoader__.load({
 
 		//#region Mode switcher (Normal / Plan)
 		/**
-		 * A compact dropdown mode switcher styled like the access-mode
+		 * A dropdown mode switcher visually matching the access-mode
 		 * (permission) toggle. Reads the `plan` session projection to show the
 		 * current collaboration mode and drives `/plan` / `/plan off` through
 		 * the host command channel.
@@ -845,32 +845,47 @@ window.__ModuleLoader__.load({
 					anchor: react.createElement("button", {
 						type: "button",
 						role: "button",
+						className: "dsh-qol-mode-trigger",
 						"aria-label": `Mode, current: ${currentMode === "plan" ? "Plan" : "Normal"}`,
 						title: "Switch between Normal and Plan mode",
 						disabled: busy,
 						onClick: () => setOpen(!open),
 						style: {
 							boxSizing: "border-box",
-							display: "inline-flex",
-							alignItems: "center",
-							gap: "6px",
-							height: "32px",
-							padding: "0 10px",
-							border: "1px solid var(--dsw-alias-border-l2)",
-							borderRadius: "999px",
-							background: "transparent",
-							color: "var(--dsw-alias-label-primary)",
+							minWidth: "0",
+							maxWidth: "220px",
+							height: "28px",
+							color: "var(--dsw-alias-label-secondary)",
 							cursor: busy ? "default" : "pointer",
-							font: "inherit",
+							background: "transparent",
+							border: "none",
+							borderRadius: "24px",
+							outline: "none",
+							alignItems: "center",
+							gap: "4px",
+							padding: "0 4px 0 8px",
 							fontSize: "13px",
-							lineHeight: "20px"
+							fontWeight: "500",
+							lineHeight: "20px",
+							display: "inline-flex"
 						}
 					},
-						react.createElement("span", { "aria-hidden": "true", style: { fontSize: "12px", lineHeight: "1" } },
-							effectivePlan ? "🧠" : "◇"),
-						react.createElement("span", { style: { whiteSpace: "nowrap" } },
+						react.createElement("span", {
+							"aria-hidden": "true",
+							style: { flex: "none", display: "inline-flex", fontSize: "14px", lineHeight: "1" }
+						}, effectivePlan ? "🧠" : "◇"),
+						react.createElement("span", { style: { textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: "0", overflow: "hidden" } },
 							currentMode === "plan" ? "Plan" : "Normal"),
-						react.createElement("span", { "aria-hidden": "true", style: { color: "var(--dsw-alias-label-tertiary)", fontSize: "10px", lineHeight: "1" } }, "▾")
+						react.createElement("span", {
+							"aria-hidden": "true",
+							style: {
+								color: "var(--dsw-alias-label-caption)",
+								flex: "none",
+								transition: "transform .12s",
+								display: "inline-flex",
+								transform: open ? "rotate(180deg)" : "rotate(0deg)"
+							}
+						}, "▾")
 					)
 				})
 			);
@@ -880,11 +895,34 @@ window.__ModuleLoader__.load({
 		let modeSwitcherDispose = null;
 		/** Root client context, captured at apply time for slot/command access. */
 		let qolCtx = null;
+		/** Hide-style element that suppresses the built-in Plan chip while the switcher is on. */
+		let modeChipHideStyle = null;
+		/**
+		 * Inline style for the mode trigger (hover/focus) and the built-in
+		 * Plan-chip suppression. Injected once; the chip rule is scoped to a
+		 * `dsh-qol-hide-plan-chip` class toggled on <body>.
+		 */
+		function ensureModeStyles() {
+			if (modeChipHideStyle !== null) return;
+			const style = document.createElement("style");
+			style.dataset.plugin = "@deepseek-ai/dsh-qol";
+			style.textContent =
+				".dsh-qol-mode-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}" +
+				".dsh-qol-mode-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}" +
+				".dsh-qol-mode-trigger:disabled{color:var(--dsw-alias-label-dimmed)}" +
+				"body.dsh-qol-hide-plan-chip button[title*=\"/plan off\"]{display:none !important}";
+			document.head.appendChild(style);
+			modeChipHideStyle = style;
+		}
 		/** Mount or unmount the Normal/Plan mode switcher in the composer. */
 		function applyModeSwitcher(show) {
 			if (qolCtx === null) return;
 			const slots = qolCtx.get("slots");
 			if (slots === void 0) return;
+			if (typeof document !== "undefined" && document !== null) {
+				ensureModeStyles();
+				document.body.classList.toggle("dsh-qol-hide-plan-chip", show === true);
+			}
 			if (show) {
 				if (modeSwitcherDispose !== null) return;
 				modeSwitcherDispose = slots.inject("conversation.input.left", () => slots.register({
