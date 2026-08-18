@@ -19,6 +19,8 @@ window.__ModuleLoader__.load({
 		var exports = module.exports;
 		Object.defineProperty(exports, Symbol.toStringTag, { value: "Module" });
 		let react = require("react");
+		let primitives = require("@deepseek-ai/dsh-client-ui-primitives");
+		const { Menu } = primitives;
 
 		//#region theme & controls
 		/** DSH theme-variable colors (matches Models/General row styling). */
@@ -805,6 +807,109 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region Mode switcher (Normal / Plan)
+		/**
+		 * A compact dropdown mode switcher styled like the access-mode
+		 * (permission) toggle. Reads the `plan` session projection to show the
+		 * current collaboration mode and drives `/plan` / `/plan off` through
+		 * the host command channel.
+		 */
+		function ModeSelect({ useProjection, switchMode }) {
+			const plan = useProjection("plan");
+			const [open, setOpen] = react.useState(false);
+			const [busy, setBusy] = react.useState(false);
+			const effectivePlan = plan === undefined || plan === null ? false : (plan.pending ? !plan.active : plan.active);
+			const currentMode = effectivePlan ? "plan" : "normal";
+			const items = [
+				{ id: "normal", label: "Normal" },
+				{ id: "plan", label: "Plan" }
+			];
+			const submit = (id) => {
+				if (id === currentMode) { setOpen(false); return; }
+				setBusy(true);
+				setOpen(false);
+				const finish = () => setBusy(false);
+				Promise.resolve()
+					.then(() => typeof switchMode === "function" ? switchMode(id) : void 0)
+					.catch(() => {})
+					.finally(finish);
+			};
+			return react.createElement(react.Fragment, null,
+				react.createElement(Menu, {
+					open,
+					items,
+					selectedId: currentMode,
+					onSelect: submit,
+					onClose: () => setOpen(false),
+					side: "top",
+					anchor: react.createElement("button", {
+						type: "button",
+						role: "button",
+						"aria-label": `Mode, current: ${currentMode === "plan" ? "Plan" : "Normal"}`,
+						title: "Switch between Normal and Plan mode",
+						disabled: busy,
+						onClick: () => setOpen(!open),
+						style: {
+							boxSizing: "border-box",
+							display: "inline-flex",
+							alignItems: "center",
+							gap: "6px",
+							height: "32px",
+							padding: "0 10px",
+							border: "1px solid var(--dsw-alias-border-l2)",
+							borderRadius: "999px",
+							background: "transparent",
+							color: "var(--dsw-alias-label-primary)",
+							cursor: busy ? "default" : "pointer",
+							font: "inherit",
+							fontSize: "13px",
+							lineHeight: "20px"
+						}
+					},
+						react.createElement("span", { "aria-hidden": "true", style: { fontSize: "12px", lineHeight: "1" } },
+							effectivePlan ? "🧠" : "◇"),
+						react.createElement("span", { style: { whiteSpace: "nowrap" } },
+							currentMode === "plan" ? "Plan" : "Normal"),
+						react.createElement("span", { "aria-hidden": "true", style: { color: "var(--dsw-alias-label-tertiary)", fontSize: "10px", lineHeight: "1" } }, "▾")
+					)
+				})
+			);
+		}
+
+		/** Slot disposer for the mode switcher; set while the control is injected. */
+		let modeSwitcherDispose = null;
+		/** Root client context, captured at apply time for slot/command access. */
+		let qolCtx = null;
+		/** Mount or unmount the Normal/Plan mode switcher in the composer. */
+		function applyModeSwitcher(show) {
+			if (qolCtx === null) return;
+			const slots = qolCtx.get("slots");
+			if (slots === void 0) return;
+			if (show) {
+				if (modeSwitcherDispose !== null) return;
+				modeSwitcherDispose = slots.inject("conversation.input.left", () => slots.register({
+					name: "conversation.input.left",
+					id: "qol-mode",
+					order: 50,
+					inject: (sessionId) => ({
+						switchMode: async (mode) => {
+							const remote = qolCtx.get("remote.commands");
+							if (remote === void 0 || remote === null) return;
+							const command = mode === "plan" ? "/plan" : "/plan off";
+							try { await remote.execute(sessionId, command); } catch { /* ignore */ }
+						}
+					})
+				}, ModeSelect));
+			} else {
+				if (modeSwitcherDispose !== null) {
+					const dispose = modeSwitcherDispose;
+					modeSwitcherDispose = null;
+					dispose();
+				}
+			}
+		}
+		//#endregion
+
 		/**
 		 * The QoL settings page: prefs rows plus an MCP server manager with
 		 * list and detail views (in-page navigation).
@@ -825,6 +930,7 @@ window.__ModuleLoader__.load({
 						setPrefs(p);
 						applySessionLogButton(p.sessionLogButton !== false);
 						applyThinkingMode(p.thinkingMode);
+						applyModeSwitcher(p.showModeSwitcher !== false);
 					})
 					.catch((err) => alive && setError(err instanceof Error ? err.message : String(err)));
 				return () => { alive = false; };
@@ -849,6 +955,9 @@ window.__ModuleLoader__.load({
 						}
 						if (Object.prototype.hasOwnProperty.call(patch, "thinkingMode")) {
 							applyThinkingMode(next.thinkingMode);
+						}
+						if (Object.prototype.hasOwnProperty.call(patch, "showModeSwitcher")) {
+							applyModeSwitcher(next.showModeSwitcher !== false);
 						}
 					})
 					.catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -957,6 +1066,18 @@ window.__ModuleLoader__.load({
 								? "Opens thinking as it streams and keeps it expanded after completion."
 								: "Leave thinking disclosures collapsed until clicked (shipped default).")
 				),
+				react.createElement("div", { style: ROW },
+					textBlock(
+						"Mode switcher",
+						"Show a Normal/Plan mode switch next to the access-mode button in the composer."
+					),
+					react.createElement(Switch, {
+						checked: prefs === null ? true : prefs.showModeSwitcher !== false,
+						disabled: prefs === null,
+						label: "Mode switcher",
+						onChange: (value) => update({ showModeSwitcher: value })
+					})
+				),
 				react.createElement("div", {
 					style: { ...ROW, cursor: "pointer" },
 					role: "button",
@@ -997,6 +1118,7 @@ window.__ModuleLoader__.load({
 						if (prefs === null) return;
 						applySessionLogButton(prefs.sessionLogButton !== false);
 						applyThinkingMode(prefs.thinkingMode);
+						applyModeSwitcher(prefs.showModeSwitcher !== false);
 					})
 					.catch(() => {
 						if (attempts < LAUNCH_PREF_RETRIES) setTimeout(tryApply, LAUNCH_PREF_RETRY_MS);
@@ -1006,6 +1128,7 @@ window.__ModuleLoader__.load({
 		}
 		/** Register the QoL settings page (order 30) and the sidebar-footer background-jobs action. */
 		function apply(ctx) {
+			qolCtx = ctx;
 			applyPrefsOnLaunch();
 			const slots = ctx.get("slots");
 			if (slots === undefined) return;

@@ -37,7 +37,7 @@ function dshHome() {
 const THINKING_MODES = ["off", "line", "expanded"];
 /** Defaults applied when the prefs file is absent or malformed. */
 function defaultPrefs() {
-	return { sessionLogButton: true, controlBackgroundJobs: true, thinkingMode: "off" };
+	return { sessionLogButton: true, controlBackgroundJobs: true, thinkingMode: "off", showModeSwitcher: true };
 }
 
 /** Coerce a raw value into a valid thinking mode. */
@@ -54,7 +54,8 @@ function readPrefs() {
 		return {
 			sessionLogButton: typeof raw.sessionLogButton === "boolean" ? raw.sessionLogButton : d.sessionLogButton,
 			controlBackgroundJobs: typeof raw.controlBackgroundJobs === "boolean" ? raw.controlBackgroundJobs : d.controlBackgroundJobs,
-			thinkingMode: coerceThinkingMode(raw.thinkingMode)
+			thinkingMode: coerceThinkingMode(raw.thinkingMode),
+			showModeSwitcher: typeof raw.showModeSwitcher === "boolean" ? raw.showModeSwitcher : d.showModeSwitcher
 		};
 	} catch {
 		return defaultPrefs();
@@ -67,6 +68,7 @@ function writePrefs(patch) {
 	if (typeof merged.sessionLogButton !== "boolean") throw new Error("sessionLogButton must be a boolean");
 	if (typeof merged.controlBackgroundJobs !== "boolean") throw new Error("controlBackgroundJobs must be a boolean");
 	if (!THINKING_MODES.includes(merged.thinkingMode)) throw new Error(`thinkingMode must be one of ${THINKING_MODES.join(", ")}`);
+	if (typeof merged.showModeSwitcher !== "boolean") throw new Error("showModeSwitcher must be a boolean");
 	writeFileSync(join(dshHome(), "qol-prefs.json"), JSON.stringify(merged, null, 2) + "\n", "utf8");
 	return merged;
 }

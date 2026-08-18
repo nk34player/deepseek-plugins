@@ -13,6 +13,10 @@ page (a new nav section, same styling as Models/General).
   - **Line Follow** — auto-expand the moment thinking starts, keep the current
     line in view as it streams, then auto-collapse when thinking completes.
   - **Expanded** — auto-expand the moment thinking starts and leave it open.
+- **Mode switcher** (toggle, default on) — a compact **Normal / Plan** dropdown
+  next to the access-mode (permission) button in the composer. Pick a mode to
+  switch the session between normal and plan mode (runs `/plan` / `/plan off`).
+  Turn the QoL toggle off to hide the control entirely.
 - **Background jobs** (sidebar button) — a **Background jobs** button in the
   sidebar (styled like New Session: full row when wide, round icon in the
   collapsed rail). Clicking it opens a **modal** listing every background job
