@@ -692,6 +692,119 @@ window.__ModuleLoader__.load({
 		}
 		//#endregion
 
+		//#region Thinking-content mode
+		/**
+		 * Controls how assistant reasoning ("Think") disclosures behave in the
+		 * transcript:
+		 *   - off:      leave the shipped collapsed disclosure untouched.
+		 *   - line:     auto-expand when thinking starts, keep the latest line in
+		 *               view while it streams, then auto-collapse on completion.
+		 *   - expanded: auto-expand when thinking starts and leave it open.
+		 *
+		 * Driven by a DOM observer over `[data-variant="think"]` (the ReasoningRow
+		 * root) and its `[data-disclosure-row]` toggle — stable hooks, so the
+		 * hashed CSS-module class names never need to be referenced.
+		 */
+		const THINKING_MODES = ["off", "line", "expanded"];
+		let thinkingMode = "off";
+		let thinkingObserver = null;
+
+		/** All ReasoningRow roots currently in the transcript. */
+		function thinkRoots() {
+			return Array.from(document.querySelectorAll('[data-variant="think"]'));
+		}
+		/** The clickable disclosure row inside a think root, or null. */
+		function thinkRow(root) {
+			return root.querySelector('[data-disclosure-row]');
+		}
+		function isExpanded(root) {
+			const row = thinkRow(root);
+			return row !== null && row.getAttribute("aria-expanded") === "true";
+		}
+		/** Expand a collapsed disclosure row (idempotent). */
+		function expandThink(root) {
+			const row = thinkRow(root);
+			if (row !== null && row.getAttribute("aria-expanded") !== "true") row.click();
+		}
+		/** Collapse an open disclosure row (idempotent). */
+		function collapseThink(root) {
+			const row = thinkRow(root);
+			if (row !== null && row.getAttribute("aria-expanded") === "true") row.click();
+		}
+		/** Keep the latest thinking line visible by pinning the nearest scrollable ancestor to its bottom. */
+		function followLine(root) {
+			let el = root.parentElement;
+			while (el !== null && el !== document.body) {
+				const style = getComputedStyle(el);
+				const scrollable = (style.overflowY === "auto" || style.overflowY === "scroll") && el.scrollHeight > el.clientHeight;
+				if (scrollable) { el.scrollTop = el.scrollHeight; return; }
+				el = el.parentElement;
+			}
+		}
+		/** Apply the active mode to every think row (idempotent; no-op for "off"). */
+		function handleThinkingRows() {
+			if (thinkingMode === "off") return;
+			thinkRoots().forEach((root) => {
+				const running = root.getAttribute("data-state") === "running";
+				if (running) {
+					expandThink(root);
+					if (thinkingMode === "line") followLine(root);
+				} else if (thinkingMode === "line") {
+					// thinking completed -> auto-collapse (expanded mode leaves it open)
+					collapseThink(root);
+				}
+			});
+		}
+		/** Set the mode and ensure the observer is watching the transcript. */
+		function applyThinkingMode(mode) {
+			thinkingMode = THINKING_MODES.includes(mode) ? mode : "off";
+			if (typeof MutationObserver === "undefined") return;
+			if (thinkingObserver === null) {
+				thinkingObserver = new MutationObserver(handleThinkingRows);
+				thinkingObserver.observe(document.body, {
+					childList: true,
+					subtree: true,
+					attributes: true,
+					attributeFilter: ["data-state", "data-variant", "aria-expanded"]
+				});
+			}
+			handleThinkingRows();
+		}
+		/** A compact DSH-styled segmented control (e.g. the 3 thinking modes). */
+		function Segmented({ value, options, onChange, disabled }) {
+			return react.createElement("div", {
+				style: {
+					display: "flex",
+					gap: "4px",
+					padding: "3px",
+					background: "var(--dsw-alias-interactive-bg-hover)",
+					borderRadius: "12px",
+					flex: "none"
+				}
+			}, options.map((opt) => react.createElement("button", {
+				key: opt.value,
+				type: "button",
+				disabled: disabled === true,
+				"aria-pressed": value === opt.value,
+				onClick: () => onChange(opt.value),
+				style: {
+					boxSizing: "border-box",
+					height: "26px",
+					font: "inherit",
+					fontSize: "12px",
+					lineHeight: "18px",
+					cursor: disabled === true ? "default" : "pointer",
+					border: "none",
+					borderRadius: "9px",
+					padding: "0 12px",
+					...(value === opt.value
+						? { background: "var(--dsw-alias-button-primary-fill)", color: "var(--dsw-alias-label-primary-foreground, #fff)" }
+						: { background: "transparent", color: "var(--dsw-alias-label-secondary)" })
+				}
+			}, opt.label)));
+		}
+		//#endregion
+
 		/**
 		 * The QoL settings page: prefs rows plus an MCP server manager with
 		 * list and detail views (in-page navigation).
@@ -711,6 +824,7 @@ window.__ModuleLoader__.load({
 						if (!alive || p === null) return;
 						setPrefs(p);
 						applySessionLogButton(p.sessionLogButton !== false);
+						applyThinkingMode(p.thinkingMode);
 					})
 					.catch((err) => alive && setError(err instanceof Error ? err.message : String(err)));
 				return () => { alive = false; };
@@ -732,6 +846,9 @@ window.__ModuleLoader__.load({
 						setError(null);
 						if (Object.prototype.hasOwnProperty.call(patch, "sessionLogButton")) {
 							applySessionLogButton(next.sessionLogButton !== false);
+						}
+						if (Object.prototype.hasOwnProperty.call(patch, "thinkingMode")) {
+							applyThinkingMode(next.thinkingMode);
 						}
 					})
 					.catch((err) => setError(err instanceof Error ? err.message : String(err)));
@@ -816,6 +933,30 @@ window.__ModuleLoader__.load({
 						onChange: (value) => update({ sessionLogButton: value })
 					})
 				),
+				react.createElement("div", { style: { ...ROW, alignItems: "flex-start", flexDirection: "column", gap: "8px" } },
+					react.createElement("div", { style: { display: "flex", alignItems: "center", gap: "10px", width: "100%" } },
+						textBlock(
+							"Thinking content",
+							"Control how assistant reasoning (Think) is shown while streaming."
+						),
+						react.createElement(Segmented, {
+							value: prefs === null ? "off" : prefs.thinkingMode,
+							disabled: prefs === null,
+							options: [
+								{ value: "off", label: "Off" },
+								{ value: "line", label: "Line Follow" },
+								{ value: "expanded", label: "Expanded" }
+							],
+							onChange: (value) => update({ thinkingMode: value })
+						})
+					),
+					react.createElement("div", { style: { color: "var(--dsw-alias-label-tertiary)", fontSize: "12px", lineHeight: "18px", marginLeft: "2px" } },
+						prefs !== null && prefs.thinkingMode === "line"
+							? "Opens thinking as it streams, follows the current line, and auto-collapses when done."
+							: prefs !== null && prefs.thinkingMode === "expanded"
+								? "Opens thinking as it streams and keeps it expanded after completion."
+								: "Leave thinking disclosures collapsed until clicked (shipped default).")
+				),
 				react.createElement("div", {
 					style: { ...ROW, cursor: "pointer" },
 					role: "button",
@@ -855,6 +996,7 @@ window.__ModuleLoader__.load({
 					.then((prefs) => {
 						if (prefs === null) return;
 						applySessionLogButton(prefs.sessionLogButton !== false);
+						applyThinkingMode(prefs.thinkingMode);
 					})
 					.catch(() => {
 						if (attempts < LAUNCH_PREF_RETRIES) setTimeout(tryApply, LAUNCH_PREF_RETRY_MS);

@@ -7,6 +7,12 @@ page (a new nav section, same styling as Models/General).
 
 - **Session log button** (toggle) — show or hide the "Session log" download
   button in the session header.
+- **Thinking content** (3-way) — control how assistant reasoning ("Think")
+  disclosures behave while streaming:
+  - **Off** — leave the shipped collapsed disclosure untouched (click to open).
+  - **Line Follow** — auto-expand the moment thinking starts, keep the current
+    line in view as it streams, then auto-collapse when thinking completes.
+  - **Expanded** — auto-expand the moment thinking starts and leave it open.
 - **Background jobs** (sidebar button) — a **Background jobs** button in the
   sidebar (styled like New Session: full row when wide, round icon in the
   collapsed rail). Clicking it opens a **modal** listing every background job

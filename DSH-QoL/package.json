@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-ai/dsh-qol",
-  "description": "DSH-QoL: quality-of-life toggles — session-log download button visibility, persisted and applied at launch",
+  "description": "DSH-QoL: quality-of-life controls — session-log button visibility, thinking-content display mode, persisted and applied at launch",
   "version": "0.1.0",
   "private": true,
   "type": "module",

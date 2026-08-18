@@ -33,9 +33,16 @@ function dshHome() {
 }
 
 //#region preferences
+/** Valid thinking-content modes. */
+const THINKING_MODES = ["off", "line", "expanded"];
 /** Defaults applied when the prefs file is absent or malformed. */
 function defaultPrefs() {
-	return { sessionLogButton: true, controlBackgroundJobs: true };
+	return { sessionLogButton: true, controlBackgroundJobs: true, thinkingMode: "off" };
+}
+
+/** Coerce a raw value into a valid thinking mode. */
+function coerceThinkingMode(value) {
+	return THINKING_MODES.includes(value) ? value : defaultPrefs().thinkingMode;
 }
 
 /** Read the prefs file, merging defaults. */
@@ -46,7 +53,8 @@ function readPrefs() {
 		const d = defaultPrefs();
 		return {
 			sessionLogButton: typeof raw.sessionLogButton === "boolean" ? raw.sessionLogButton : d.sessionLogButton,
-			controlBackgroundJobs: typeof raw.controlBackgroundJobs === "boolean" ? raw.controlBackgroundJobs : d.controlBackgroundJobs
+			controlBackgroundJobs: typeof raw.controlBackgroundJobs === "boolean" ? raw.controlBackgroundJobs : d.controlBackgroundJobs,
+			thinkingMode: coerceThinkingMode(raw.thinkingMode)
 		};
 	} catch {
 		return defaultPrefs();
@@ -58,6 +66,7 @@ function writePrefs(patch) {
 	const merged = { ...readPrefs(), ...patch };
 	if (typeof merged.sessionLogButton !== "boolean") throw new Error("sessionLogButton must be a boolean");
 	if (typeof merged.controlBackgroundJobs !== "boolean") throw new Error("controlBackgroundJobs must be a boolean");
+	if (!THINKING_MODES.includes(merged.thinkingMode)) throw new Error(`thinkingMode must be one of ${THINKING_MODES.join(", ")}`);
 	writeFileSync(join(dshHome(), "qol-prefs.json"), JSON.stringify(merged, null, 2) + "\n", "utf8");
 	return merged;
 }
