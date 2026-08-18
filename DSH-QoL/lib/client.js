@@ -873,7 +873,7 @@ window.__ModuleLoader__.load({
 						react.createElement("span", {
 							"aria-hidden": "true",
 							style: { flex: "none", display: "inline-flex", fontSize: "14px", lineHeight: "1" }
-						}, effectivePlan ? "🧠" : "◇"),
+						}, effectivePlan ? "🧠" : "💬"),
 						react.createElement("span", { style: { textOverflow: "ellipsis", whiteSpace: "nowrap", minWidth: "0", overflow: "hidden" } },
 							currentMode === "plan" ? "Plan" : "Normal"),
 						react.createElement("span", {
@@ -909,7 +909,7 @@ window.__ModuleLoader__.load({
 			style.textContent =
 				".dsh-qol-mode-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}" +
 				".dsh-qol-mode-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}" +
-				".dsh-qol-mode-trigger:disabled{color:var(--dsw-alias-label-dimmed)}" +
+				".dsh-qol-mode-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}" +
 				"body.dsh-qol-hide-plan-chip button[title*=\"/plan off\"]{display:none !important}";
 			document.head.appendChild(style);
 			modeChipHideStyle = style;
