@@ -733,15 +733,25 @@ window.__ModuleLoader__.load({
 			const row = thinkRow(root);
 			if (row !== null && row.getAttribute("aria-expanded") === "true") row.click();
 		}
-		/** Keep the latest thinking line visible by pinning the nearest scrollable ancestor to its bottom. */
+		let followFrame = null;
+		/** Follow only an already-following transcript; never hijack manual scroll. */
 		function followLine(root) {
-			let el = root.parentElement;
-			while (el !== null && el !== document.body) {
-				const style = getComputedStyle(el);
-				const scrollable = (style.overflowY === "auto" || style.overflowY === "scroll") && el.scrollHeight > el.clientHeight;
-				if (scrollable) { el.scrollTop = el.scrollHeight; return; }
-				el = el.parentElement;
-			}
+			if (followFrame !== null) return;
+			const schedule = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback) => setTimeout(callback, 0);
+			followFrame = schedule(() => {
+				followFrame = null;
+				let el = root.parentElement;
+				while (el !== null && el !== document.body) {
+					const style = getComputedStyle(el);
+					const scrollable = (style.overflowY === "auto" || style.overflowY === "scroll") && el.scrollHeight > el.clientHeight;
+					if (scrollable) {
+						const distanceFromEnd = el.scrollHeight - el.clientHeight - el.scrollTop;
+						if (distanceFromEnd <= 96) el.scrollTop = el.scrollHeight;
+						return;
+					}
+					el = el.parentElement;
+				}
+			});
 		}
 		/** Apply the active mode to every think row (idempotent; no-op for "off"). */
 		function handleThinkingRows() {
@@ -842,6 +852,7 @@ window.__ModuleLoader__.load({
 					onSelect: submit,
 					onClose: () => setOpen(false),
 					side: "top",
+					className: "dsh-qol-mode-menu",
 					anchor: react.createElement("button", {
 						type: "button",
 						role: "button",
@@ -910,6 +921,7 @@ window.__ModuleLoader__.load({
 				".dsh-qol-mode-trigger:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}" +
 				".dsh-qol-mode-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}" +
 				".dsh-qol-mode-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}" +
+				".dsh-qol-mode-menu [role=menuitem]{font-family:inherit;font-size:13px;font-weight:400;line-height:20px;letter-spacing:normal}" +
 				"body.dsh-qol-hide-plan-chip button[title*=\"/plan off\"]{display:none !important}";
 			document.head.appendChild(style);
 			modeChipHideStyle = style;
