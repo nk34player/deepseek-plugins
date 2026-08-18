@@ -710,6 +710,7 @@ window.__ModuleLoader__.load({
 		const THINKING_MODES = ["off", "line", "expanded"];
 		let thinkingMode = "off";
 		let thinkingObserver = null;
+		let autoExpandedThinkingRows = new WeakSet();
 
 		/** All ReasoningRow roots currently in the transcript. */
 		function thinkRoots() {
@@ -726,12 +727,16 @@ window.__ModuleLoader__.load({
 		/** Expand a collapsed disclosure row (idempotent). */
 		function expandThink(root) {
 			const row = thinkRow(root);
-			if (row !== null && row.getAttribute("aria-expanded") !== "true") row.click();
+			if (row !== null && row.getAttribute("aria-expanded") !== "true") {
+				row.click();
+				autoExpandedThinkingRows.add(root);
+			}
 		}
-		/** Collapse an open disclosure row (idempotent). */
+		/** Collapse only a row this plugin auto-expanded (never override user state). */
 		function collapseThink(root) {
 			const row = thinkRow(root);
-			if (row !== null && row.getAttribute("aria-expanded") === "true") row.click();
+			if (autoExpandedThinkingRows.has(root) && row !== null && row.getAttribute("aria-expanded") === "true") row.click();
+			autoExpandedThinkingRows.delete(root);
 		}
 		let followFrame = null;
 		/** Follow only an already-following transcript; never hijack manual scroll. */
@@ -831,8 +836,8 @@ window.__ModuleLoader__.load({
 			const effectivePlan = plan === undefined || plan === null ? false : (plan.pending ? !plan.active : plan.active);
 			const currentMode = effectivePlan ? "plan" : "normal";
 			const items = [
-				{ id: "normal", label: "Normal" },
-				{ id: "plan", label: "Plan" }
+				{ id: "normal", label: "Normal", icon: react.createElement("span", { "aria-hidden": "true", style: { fontSize: "14px", lineHeight: "1" } }, "💬") },
+				{ id: "plan", label: "Plan", icon: react.createElement("span", { "aria-hidden": "true", style: { fontSize: "14px", lineHeight: "1" } }, "🧠") }
 			];
 			const submit = (id) => {
 				if (id === currentMode) { setOpen(false); return; }
@@ -922,6 +927,8 @@ window.__ModuleLoader__.load({
 				".dsh-qol-mode-trigger:focus-visible{box-shadow:0 0 0 2px var(--dsw-alias-border-l3)}" +
 				".dsh-qol-mode-trigger:disabled{color:var(--dsw-alias-label-dimmed);cursor:default}" +
 				".dsh-qol-mode-menu [role=menuitem]{font-family:inherit;font-size:13px;font-weight:400;line-height:20px;letter-spacing:normal}" +
+				".dsh-qol-mode-menu [role=menuitem]:hover:not(:disabled){background:var(--dsw-alias-interactive-bg-hover)}" +
+				".dsh-qol-mode-menu [role=menuitem]:focus-visible{outline:2px solid var(--dsw-alias-border-l3);outline-offset:-2px}" +
 				"body.dsh-qol-hide-plan-chip button[title*=\"/plan off\"]{display:none !important}";
 			document.head.appendChild(style);
 			modeChipHideStyle = style;
