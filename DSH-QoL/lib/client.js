@@ -727,10 +727,14 @@ window.__ModuleLoader__.load({
 		/** Expand a collapsed disclosure row (idempotent). */
 		function expandThink(root) {
 			const row = thinkRow(root);
-			if (row !== null && row.getAttribute("aria-expanded") !== "true") {
-				row.click();
-				autoExpandedThinkingRows.add(root);
-			}
+			if (row === null || row.getAttribute("aria-expanded") === "true") return;
+			// A click was already issued and React has not committed it yet —
+			// clicking again would toggle the row straight back closed. A row the
+			// user collapsed by hand during the stream is left alone for the rest
+			// of it, which also keeps us from fighting the user.
+			if (autoExpandedThinkingRows.has(root)) return;
+			row.click();
+			autoExpandedThinkingRows.add(root);
 		}
 		/** Collapse only a row this plugin auto-expanded (never override user state). */
 		function collapseThink(root) {
@@ -738,24 +742,52 @@ window.__ModuleLoader__.load({
 			if (autoExpandedThinkingRows.has(root) && row !== null && row.getAttribute("aria-expanded") === "true") row.click();
 			autoExpandedThinkingRows.delete(root);
 		}
+		/** Distance from the transcript end still treated as "following". */
+		const FOLLOW_SLACK_PX = 96;
 		let followFrame = null;
-		/** Follow only an already-following transcript; never hijack manual scroll. */
+		/** Per-scroller follow flag: false once the user scrolls away from the end. */
+		const followState = new WeakMap();
+		/** Scrollers that already carry a scroll listener. */
+		const followWatched = new WeakSet();
+		/** Time of our last programmatic pin, so its own scroll event is ignored. */
+		const followPinAt = new WeakMap();
+		/** The transcript's scroll container (nearest scrollable ancestor), or null. */
+		function scrollerOf(root) {
+			let el = root.parentElement;
+			while (el !== null && el !== document.body) {
+				const style = getComputedStyle(el);
+				if ((style.overflowY === "auto" || style.overflowY === "scroll") && el.scrollHeight > el.clientHeight) return el;
+				el = el.parentElement;
+			}
+			return null;
+		}
+		/** Watch one container; every non-programmatic scroll updates whether we follow it. */
+		function watchScroller(el) {
+			if (followWatched.has(el)) return;
+			followWatched.add(el);
+			el.addEventListener("scroll", () => {
+				if (Date.now() - (followPinAt.get(el) ?? 0) < 200) return;
+				followState.set(el, el.scrollHeight - el.clientHeight - el.scrollTop <= FOLLOW_SLACK_PX);
+			}, { passive: true });
+		}
+		/**
+		 * Keep the latest thinking line in view. Following is the default and only
+		 * stops once the user scrolls the transcript away from its end: a container
+		 * that merely grew (streamed text, a just-expanded disclosure) is still
+		 * followed, which a plain distance check cannot tell apart from a user
+		 * scrolling up — and so used to stall the moment the expansion added height.
+		 */
 		function followLine(root) {
 			if (followFrame !== null) return;
 			const schedule = typeof requestAnimationFrame === "function" ? requestAnimationFrame : (callback) => setTimeout(callback, 0);
 			followFrame = schedule(() => {
 				followFrame = null;
-				let el = root.parentElement;
-				while (el !== null && el !== document.body) {
-					const style = getComputedStyle(el);
-					const scrollable = (style.overflowY === "auto" || style.overflowY === "scroll") && el.scrollHeight > el.clientHeight;
-					if (scrollable) {
-						const distanceFromEnd = el.scrollHeight - el.clientHeight - el.scrollTop;
-						if (distanceFromEnd <= 96) el.scrollTop = el.scrollHeight;
-						return;
-					}
-					el = el.parentElement;
-				}
+				const el = scrollerOf(root);
+				if (el === null) return;
+				watchScroller(el);
+				if (followState.get(el) === false) return;
+				el.scrollTop = el.scrollHeight;
+				followPinAt.set(el, Date.now());
 			});
 		}
 		/** Apply the active mode to every think row (idempotent; no-op for "off"). */
@@ -781,6 +813,10 @@ window.__ModuleLoader__.load({
 				thinkingObserver.observe(document.body, {
 					childList: true,
 					subtree: true,
+					// Streamed reasoning text updates the existing text node's
+					// nodeValue, which is a characterData record — without this the
+					// observer never fires again until the row changes state.
+					characterData: true,
 					attributes: true,
 					attributeFilter: ["data-state", "data-variant", "aria-expanded"]
 				});
