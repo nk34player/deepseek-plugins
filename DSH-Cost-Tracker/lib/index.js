@@ -87,7 +87,12 @@ function readProviders() {
 	return providers;
 }
 
-/** Read the flat `KEY: value` map from .credentials.yaml. */
+/**
+ * Read the credential `KEY: value` map from .credentials.yaml. The shipped
+ * store is the version-1 layout (`version: 1` + the secrets nested two spaces
+ * under `refs:`); the pre-release flat layout (`KEY: value` at column 0) is
+ * still accepted so an unmigrated file keeps working.
+ */
 function readCredentials() {
 	const path = join(dshHome(), ".credentials.yaml");
 	let lines;
@@ -97,11 +102,42 @@ function readCredentials() {
 		return {};
 	}
 	const creds = {};
+	let inRefs = false;
 	for (const raw of lines) {
-		const m = raw.match(/^([A-Za-z0-9_.-]+):\s*(.*)$/);
-		if (m) creds[m[1]] = m[2].trim();
+		const indent = raw.match(/^\s*/)?.[0].length ?? 0;
+		const body = raw.slice(indent).trim();
+		if (body === "" || body.startsWith("#")) continue;
+		if (indent === 0) inRefs = body === "refs:";
+		if (indent === 0 && !inRefs) {
+			const flat = body.match(/^([A-Za-z0-9_.-]+):\s*(.*)$/);
+			if (flat) creds[flat[1]] = unquote(flat[2]);
+			continue;
+		}
+		if (!inRefs) continue;
+		const entry = body.match(/^([A-Za-z0-9_.-]+):\s*(.*)$/);
+		if (entry) creds[entry[1]] = unquote(entry[2]);
 	}
 	return creds;
+}
+
+/** Strip surrounding quotes and whitespace from a YAML scalar. */
+function unquote(value) {
+	const trimmed = value.trim();
+	return trimmed.length > 1 && (trimmed[0] === '"' || trimmed[0] === "'") && trimmed[trimmed.length - 1] === trimmed[0]
+		? trimmed.slice(1, -1)
+		: trimmed;
+}
+
+/**
+ * Balance endpoint of a provider's API: `{baseURL}/usage`, keeping the
+ * `/v1` prefix when the base URL already carries it. Anthropic-style bases
+ * (e.g. `api: anthropic-messages`) stop at the host because the SDK appends
+ * `/v1/messages` itself, so `/v1` has to be added here — otherwise the
+ * request lands on the provider's website, not its API.
+ */
+function usageUrl(baseURL) {
+	const base = baseURL.replace(/\/+$/, "");
+	return /\/v\d+$/.test(base) ? `${base}/usage` : `${base}/v1/usage`;
 }
 
 /** Resolve one provider's API key: env var first, then the credentials file. */
@@ -117,7 +153,7 @@ function resolveKey(provider, creds) {
  * @returns { balance?, unit?, error? } — balance/unit on success, error text on failure.
  */
 async function fetchBalance(baseURL, key) {
-	const url = `${baseURL.replace(/\/+$/, "")}/usage`;
+	const url = usageUrl(baseURL);
 	const ctrl = new AbortController();
 	const timer = setTimeout(() => ctrl.abort(), 8000);
 	try {
