@@ -833,6 +833,9 @@ window.__ModuleLoader__.load({
 			const plan = useProjection("plan");
 			const [open, setOpen] = react.useState(false);
 			const [busy, setBusy] = react.useState(false);
+			const [error, setError] = react.useState(null);
+			const aliveRef = react.useRef(true);
+			react.useEffect(() => () => { aliveRef.current = false; }, []);
 			const effectivePlan = plan === undefined || plan === null ? false : (plan.pending ? !plan.active : plan.active);
 			const currentMode = effectivePlan ? "plan" : "normal";
 			const items = [
@@ -842,12 +845,16 @@ window.__ModuleLoader__.load({
 			const submit = (id) => {
 				if (id === currentMode) { setOpen(false); return; }
 				setBusy(true);
+				setError(null);
 				setOpen(false);
-				const finish = () => setBusy(false);
 				Promise.resolve()
-					.then(() => typeof switchMode === "function" ? switchMode(id) : void 0)
-					.catch(() => {})
-					.finally(finish);
+					.then(() => typeof switchMode === "function" ? switchMode(id) : "Mode switching is unavailable.")
+					.then((failure) => {
+						if (aliveRef.current) setError(typeof failure === "string" && failure !== "" ? failure : null);
+					}, (reason) => {
+						if (aliveRef.current) setError(reason instanceof Error ? reason.message : String(reason));
+					})
+					.finally(() => { if (aliveRef.current) setBusy(false); });
 			};
 			return react.createElement(react.Fragment, null,
 				react.createElement(Menu, {
@@ -903,7 +910,20 @@ window.__ModuleLoader__.load({
 							}
 						}, "▾")
 					)
-				})
+				}),
+				error === null ? null : react.createElement("span", {
+					role: "status",
+					title: error,
+					style: {
+						color: "var(--dsw-alias-state-error-primary)",
+						fontSize: "12px",
+						lineHeight: "18px",
+						maxWidth: "220px",
+						overflow: "hidden",
+						textOverflow: "ellipsis",
+						whiteSpace: "nowrap"
+					}
+				}, error)
 			);
 		}
 
@@ -949,11 +969,24 @@ window.__ModuleLoader__.load({
 					id: "qol-mode",
 					order: 50,
 					inject: (sessionId) => ({
+						/** Run `/plan` or `/plan off`; resolves to null on success, else a message. */
 						switchMode: async (mode) => {
 							const remote = qolCtx.get("remote.commands");
-							if (remote === void 0 || remote === null) return;
-							const command = mode === "plan" ? "/plan" : "/plan off";
-							try { await remote.execute(sessionId, command); } catch { /* ignore */ }
+							if (remote === void 0 || remote === null) return "Command channel unavailable.";
+							const line = mode === "plan" ? "/plan" : "/plan off";
+							let result;
+							try {
+								// `submittedAttachments` is required by the host face
+								// schema (z.array, not optional) — omitting it fails
+								// validation before the command ever runs.
+								result = await remote.execute(sessionId, line, []);
+							} catch (error) {
+								return error instanceof Error ? error.message : String(error);
+							}
+							if (result === void 0 || result === null) return `No result for ${line}.`;
+							if (result.ok !== true) return `${result.error.message} (${result.error.code})`;
+							if (result.value === void 0) return `Unknown command: ${line}`;
+							return result.value.result.kind === "error" ? result.value.result.text : null;
 						}
 					})
 				}, ModeSelect));
